@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: zeta-forces-multiplayer
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm run server
+    envVars:
+      - key: CLIENT_ORIGIN
+        value: "*"

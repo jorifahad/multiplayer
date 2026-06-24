@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { AdaptiveDifficulty } from "./AdaptiveDifficulty";
+import { MultiplayerManager, ZombieSnapshot } from "./MultiplayerManager";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -271,7 +273,15 @@ class WeaponManager {
   private shakeStartTime = 0;
   private shakeDuration = 200;
 
-  constructor(private scene: THREE.Scene, private camera: THREE.PerspectiveCamera, private gameState: GameState, private modelManager: ModelManager, private lightingManager: LightingManager) {
+  constructor(
+    private scene: THREE.Scene,
+    private camera: THREE.PerspectiveCamera,
+    private gameState: GameState,
+    private modelManager: ModelManager,
+    private lightingManager: LightingManager,
+    private adaptiveDifficulty: AdaptiveDifficulty,
+    private multiplayer: MultiplayerManager
+  ) {
     this.bulletGeometry = new THREE.SphereGeometry(0.05, 4, 4);
     this.bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xfff000 });
   }
@@ -324,6 +334,7 @@ class WeaponManager {
   }
 
   public shoot(): void {
+    this.adaptiveDifficulty.recordShot();
     this.playGunAction(4);
     this.startCameraShake();
     this.gameState.ammo--;
@@ -338,6 +349,7 @@ class WeaponManager {
     bullet.position.copy(this.camera.getWorldPosition(this.tempVector));
     const dir = new THREE.Vector3();
     this.camera.getWorldDirection(dir);
+    this.multiplayer.sendShot(bullet.position.clone(), dir.clone());
     bullet.userData.velocity = dir.multiplyScalar(CONFIG.BULLET.SPEED);
     this.bullets.push(bullet);
     this.scene.add(bullet);
@@ -369,17 +381,30 @@ class WeaponManager {
         if (state.dead || state.dying) continue;
         box.setFromObject(zombie);
         if (box.containsPoint(bullet.position)) {
-          if (--state.health <= 0) {
-            state.health = 0;
-            state.dying = true;
-            state.deathTimer = 2;
-            this.modelManager.zombieMixers[j].stopAllAction();
+          this.adaptiveDifficulty.recordHit();
+          if (this.multiplayer.isHost) {
+            this.applyZombieDamage(j);
+          } else {
+            this.multiplayer.sendZombieHit(j);
           }
           this.scene.remove(bullet);
           this.bullets.splice(i, 1);
           break;
         }
       }
+    }
+  }
+
+  public applyZombieDamage(index: number): void {
+    const state = this.modelManager.zombieStates[index];
+    if (!state || state.dead || state.dying) return;
+    state.health -= 1;
+    if (state.health <= 0) {
+      state.health = 0;
+      state.dying = true;
+      state.deathTimer = 2;
+      this.adaptiveDifficulty.recordKill();
+      this.modelManager.zombieMixers[index]?.stopAllAction();
     }
   }
 
@@ -397,14 +422,23 @@ class EnemyManager {
   private tempVec = new THREE.Vector3();
   private avoidVec = new THREE.Vector3();
   private moveVec = new THREE.Vector3();
+  private flankVec = new THREE.Vector3();
 
-  constructor(private gameState: GameState, private modelManager: ModelManager, private camera: THREE.PerspectiveCamera) { }
+  constructor(
+    private gameState: GameState,
+    private modelManager: ModelManager,
+    private camera: THREE.PerspectiveCamera,
+    private adaptiveDifficulty: AdaptiveDifficulty
+  ) { }
 
   public updateZombie(delta: number): void {
     const zombies = this.modelManager.zombies;
     if (!zombies.length) return;
 
-    const avoidRadius = 1.0;
+    const settings = this.adaptiveDifficulty.getEnemySettings();
+    const zombieSpeed = CONFIG.ZOMBIE.SPEED * settings.movementSpeedMultiplier;
+    const damageRate = CONFIG.ZOMBIE.DAMAGE_RATE * settings.attackDamageMultiplier;
+    const avoidRadius = 1.0 * settings.separationMultiplier;
     const states = this.modelManager.zombieStates;
     let firstAliveZombieIdx = zombies.findIndex((_, i) => !states[i].dead && !states[i].dying);
     this.manageSounds(firstAliveZombieIdx !== -1 ? zombies[firstAliveZombieIdx] : null);
@@ -434,17 +468,30 @@ class EnemyManager {
         }
       }
 
-      this.moveVec.copy(this.tempVec.normalize()).multiplyScalar(CONFIG.ZOMBIE.SPEED * delta);
-      if (this.avoidVec.lengthSq() > 0) {
-        this.avoidVec.normalize().multiplyScalar(CONFIG.ZOMBIE.SPEED * delta * 0.7);
-        this.moveVec.add(this.avoidVec);
-      }
+      // Zombies only engage when the player enters the adaptive detection range.
+      if (distance <= settings.detectionRange) {
+        this.moveVec.copy(this.tempVec.normalize()).multiplyScalar(zombieSpeed * delta);
 
-      if (distance > CONFIG.ZOMBIE.MIN_DISTANCE) {
-        zombie.position.add(this.moveVec);
-        zombie.lookAt(this.camera.position.x, zombie.position.y, this.camera.position.z);
-      } else if (this.gameState.health > 0) {
-        this.gameState.health -= CONFIG.ZOMBIE.DAMAGE_RATE * delta;
+        if (this.avoidVec.lengthSq() > 0) {
+          this.avoidVec.normalize().multiplyScalar(zombieSpeed * delta * 0.7);
+          this.moveVec.add(this.avoidVec);
+        }
+
+        // Strong players make zombies more likely to flank instead of charging in a straight line.
+        if (Math.random() < settings.flankChance * delta) {
+          this.flankVec.set(-this.tempVec.z, 0, this.tempVec.x).normalize();
+          if (i % 2 === 0) this.flankVec.multiplyScalar(-1);
+          this.moveVec.addScaledVector(this.flankVec, zombieSpeed * delta * 0.8);
+        }
+
+        if (distance > CONFIG.ZOMBIE.MIN_DISTANCE) {
+          zombie.position.add(this.moveVec);
+          zombie.lookAt(this.camera.position.x, zombie.position.y, this.camera.position.z);
+        } else if (this.gameState.health > 0) {
+          const damage = damageRate * delta;
+          this.gameState.health = Math.max(0, this.gameState.health - damage);
+          this.adaptiveDifficulty.recordDamage(damage, this.gameState.health);
+        }
       }
 
       zombie.position.x = clamp(zombie.position.x, GAME_BOUNDS.minX, GAME_BOUNDS.maxX);
@@ -507,19 +554,24 @@ class UIManager {
   private zombieProgressBar: HTMLElement;
   private zombieProgressFill: HTMLElement;
   private zombieProgressText: HTMLElement;
+  private difficultyDisplay: HTMLElement;
   private totalZombies: number;
   private maxAmmo: number;
 
-  constructor(private gameState: GameState) {
+  constructor(
+    private gameState: GameState,
+    private adaptiveDifficulty: AdaptiveDifficulty
+  ) {
     this.totalZombies = CONFIG.ZOMBIE.COUNT;
-    this.createUI();
     this.maxAmmo = CONFIG.WEAPON.MAX_AMMO;
+    this.createUI();
   }
 
   private createUI(): void {
     document.body.insertAdjacentHTML('beforeend', `
       <div style="position:fixed;top:20px;right:20px;color:#fff;font-family:sans-serif;font-size:16px;text-align:right;z-index:20">
         <div id="ammoDisplay">Ammo: ${this.maxAmmo} / ${this.maxAmmo}</div>
+        <div id="difficultyDisplay" style="margin-top:6px">Enemy AI: Normal</div>
         <div id="healthBar" style="margin-top:8px;width:120px;height:16px;border:1px solid #fff">
           <div id="healthFill" style="background:#f00;width:100%;height:100%"></div>
         </div>
@@ -531,6 +583,7 @@ class UIManager {
       <div style="position:fixed;top:50%;left:50%;width:8px;height:8px;background:#f00;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:10"></div>
     `);
     this.ammoDisplay = document.getElementById('ammoDisplay')!;
+    this.difficultyDisplay = document.getElementById('difficultyDisplay')!;
     this.healthFill = document.getElementById('healthFill')!;
     this.zombieProgressBar = document.getElementById('zombieProgressBar')!;
     this.zombieProgressFill = document.getElementById('zombieProgressFill')!;
@@ -539,7 +592,14 @@ class UIManager {
 
   public updateUI(modelManager?: ModelManager): void {
     this.ammoDisplay.textContent = `Ammo: ${this.gameState.ammo} / ${this.maxAmmo}`;
-    this.healthFill.style.width = `${this.gameState.health}%`;
+    this.healthFill.style.width = `${Math.max(0, this.gameState.health)}%`;
+
+    const difficulty = this.adaptiveDifficulty.getDifficultyLevel();
+    const difficultyLabel =
+      difficulty < 0.38 ? 'Easy' :
+      difficulty < 0.68 ? 'Normal' : 'Hard';
+    this.difficultyDisplay.textContent = `Enemy AI: ${difficultyLabel} (${Math.round(difficulty * 100)}%)`;
+
     if (modelManager) {
       const killed = modelManager.zombieStates.filter(z => z.dead).length;
       const percent = Math.round((killed / this.totalZombies) * 100);
@@ -556,18 +616,26 @@ class UIManager {
 
 class InputManager {
   constructor(private gameState: GameState, private weaponManager: WeaponManager, private lightingManager: LightingManager, private controls: PointerLockControls) {
-    document.addEventListener('keydown', this.onKeyDown);
-    document.addEventListener('keyup', this.onKeyUp);
-    document.addEventListener('mousedown', this.onMouseDown);
-    document.addEventListener('mouseup', this.onMouseUp);
+    // Keyboard and mouse are handled independently so movement and firing can happen together.
+    window.addEventListener('keydown', this.onKeyDown);
+    window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('pointerdown', this.onPointerDown);
+    window.addEventListener('pointerup', this.onPointerUp);
+    window.addEventListener('blur', this.resetInput);
+    document.addEventListener('pointerlockchange', this.onPointerLockChange);
     document.body.addEventListener('click', this.onClick);
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
     this.gameState.keysPressed[e.code] = true;
+
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(e.code)) {
+      e.preventDefault();
+    }
+
     if (e.code === 'KeyR' && this.weaponManager.canReload()) {
       this.weaponManager.playGunAction(7);
-    } else if (e.code === 'KeyF') {
+    } else if (e.code === 'KeyF' && !e.repeat) {
       this.gameState.flashlightOn = !this.gameState.flashlightOn;
       this.lightingManager.toggleFlashlight();
     }
@@ -577,21 +645,43 @@ class InputManager {
     this.gameState.keysPressed[e.code] = false;
   }
 
-  private onMouseDown = (e: MouseEvent): void => {
-    if (e.button === 0) this.gameState.isShooting = true;
+  private onPointerDown = (e: PointerEvent): void => {
+    if (e.button !== 0) return;
+
+    // First click locks the mouse. Following clicks shoot, including while W/A/S/D are held.
+    if (!this.controls.isLocked) {
+      this.controls.lock();
+      return;
+    }
+
+    e.preventDefault();
+    this.gameState.isShooting = true;
   }
 
-  private onMouseUp = (): void => {
-    this.gameState.isShooting = false;
+  private onPointerUp = (e: PointerEvent): void => {
+    if (e.button === 0) {
+      this.gameState.isShooting = false;
+    }
   }
 
   private onClick = (): void => {
-    this.controls.lock();
+    if (!this.controls.isLocked) this.controls.lock();
+  }
+
+  private onPointerLockChange = (): void => {
+    if (!this.controls.isLocked) {
+      this.gameState.isShooting = false;
+    }
+  }
+
+  private resetInput = (): void => {
+    this.gameState.isShooting = false;
+    this.gameState.keysPressed = {};
   }
 
   public isWalking(): boolean {
     const { keysPressed } = this.gameState;
-    return keysPressed['KeyW'] || keysPressed['KeyA'] || keysPressed['KeyS'] || keysPressed['KeyD'];
+    return Boolean(keysPressed['KeyW'] || keysPressed['KeyA'] || keysPressed['KeyS'] || keysPressed['KeyD']);
   }
 }
 
@@ -648,6 +738,10 @@ class Game {
 
   private sceneManager: SceneManager;
   private gameState: GameState;
+  private adaptiveDifficulty: AdaptiveDifficulty;
+  private remotePlayers = new Map<string, THREE.Object3D>();
+  private remoteBulletGeometry = new THREE.SphereGeometry(0.06, 6, 6);
+  private remoteBulletMaterial = new THREE.MeshBasicMaterial({ color: 0x44ccff });
   private lightingManager: LightingManager;
   private modelManager: ModelManager;
   private weatherManager: WeatherManager;
@@ -661,22 +755,125 @@ class Game {
   private direction = new THREE.Vector3();
   private velocity = new THREE.Vector3();
 
-  constructor(private loadingManager: GameLoadingManager) {
+  constructor(private loadingManager: GameLoadingManager, private multiplayer: MultiplayerManager) {
     this.initialize();
   }
 
   private initialize(): void {
     this.sceneManager = new SceneManager();
     this.gameState = new GameState();
+    this.adaptiveDifficulty = new AdaptiveDifficulty();
     this.lightingManager = new LightingManager(this.sceneManager.scene, this.sceneManager.camera);
     this.modelManager = new ModelManager(this.sceneManager.scene, this.sceneManager.camera, this.loadingManager.manager);
     this.weatherManager = new WeatherManager(this.sceneManager.scene);
-    this.weaponManager = new WeaponManager(this.sceneManager.scene, this.sceneManager.camera, this.gameState, this.modelManager, this.lightingManager);
-    this.enemyManager = new EnemyManager(this.gameState, this.modelManager, this.sceneManager.camera);
-    this.uiManager = new UIManager(this.gameState);
+    this.weaponManager = new WeaponManager(
+      this.sceneManager.scene,
+      this.sceneManager.camera,
+      this.gameState,
+      this.modelManager,
+      this.lightingManager,
+      this.adaptiveDifficulty,
+      this.multiplayer
+    );
+    this.enemyManager = new EnemyManager(
+      this.gameState,
+      this.modelManager,
+      this.sceneManager.camera,
+      this.adaptiveDifficulty
+    );
+    this.uiManager = new UIManager(this.gameState, this.adaptiveDifficulty);
+    this.setupMultiplayerEvents();
     this.setupPostProcessing();
     this.setupWindowEvents();
     this.loadCheckpoint();
+  }
+
+  private setupMultiplayerEvents(): void {
+    this.multiplayer.onPlayerState((state) => {
+      let mesh = this.remotePlayers.get(state.id);
+      if (!mesh) {
+        mesh = this.createRemotePlayer();
+        this.remotePlayers.set(state.id, mesh);
+        this.sceneManager.scene.add(mesh);
+      }
+      mesh.position.set(state.position.x, state.position.y - 1, state.position.z);
+      mesh.rotation.y = state.rotationY;
+    });
+
+    this.multiplayer.onPlayerLeft((id) => {
+      const mesh = this.remotePlayers.get(id);
+      if (mesh) this.sceneManager.scene.remove(mesh);
+      this.remotePlayers.delete(id);
+    });
+
+    this.multiplayer.onRemoteShot((data) => this.showRemoteShot(data));
+
+    this.multiplayer.onZombieHit((index) => {
+      if (this.multiplayer.isHost) this.weaponManager.applyZombieDamage(index);
+    });
+
+    this.multiplayer.onZombieSnapshot((snapshot) => {
+      if (!this.multiplayer.isHost) this.applyZombieSnapshot(snapshot);
+    });
+  }
+
+  private createRemotePlayer(): THREE.Object3D {
+    const group = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.35, 1.0, 4, 8),
+      new THREE.MeshStandardMaterial({ color: 0x3fa9f5 })
+    );
+    body.castShadow = true;
+    group.add(body);
+    const gun = new THREE.Mesh(
+      new THREE.BoxGeometry(0.12, 0.12, 0.8),
+      new THREE.MeshStandardMaterial({ color: 0x222222 })
+    );
+    gun.position.set(0.25, 0.2, -0.45);
+    group.add(gun);
+    return group;
+  }
+
+  private showRemoteShot(data: any): void {
+    const bullet = new THREE.Mesh(this.remoteBulletGeometry, this.remoteBulletMaterial);
+    bullet.position.set(data.origin.x, data.origin.y, data.origin.z);
+    const direction = new THREE.Vector3(data.direction.x, data.direction.y, data.direction.z).normalize();
+    this.sceneManager.scene.add(bullet);
+    const started = performance.now();
+    const animateBullet = () => {
+      const elapsed = (performance.now() - started) / 1000;
+      bullet.position.addScaledVector(direction, CONFIG.BULLET.SPEED * 0.016);
+      if (elapsed < 1.2) requestAnimationFrame(animateBullet);
+      else this.sceneManager.scene.remove(bullet);
+    };
+    animateBullet();
+  }
+
+  private createZombieSnapshot(): ZombieSnapshot {
+    return {
+      positions: this.modelManager.zombies.map(z => ({
+        x: z.position.x, y: z.position.y, z: z.position.z, ry: z.rotation.y
+      })),
+      states: this.modelManager.zombieStates.map(s => ({
+        health: s.health, dead: s.dead, dying: s.dying
+      }))
+    };
+  }
+
+  private applyZombieSnapshot(snapshot: ZombieSnapshot): void {
+    snapshot.positions.forEach((p, i) => {
+      const zombie = this.modelManager.zombies[i];
+      const state = this.modelManager.zombieStates[i];
+      if (!zombie || !state) return;
+      zombie.position.set(p.x, p.y, p.z);
+      zombie.rotation.y = p.ry;
+      const incoming = snapshot.states[i];
+      if (!incoming) return;
+      state.health = incoming.health;
+      state.dead = incoming.dead;
+      state.dying = incoming.dying;
+      zombie.visible = !incoming.dead;
+    });
   }
 
   private loadCheckpoint(): void {
@@ -762,7 +959,14 @@ class Game {
     gameState.shootTimer -= delta;
     gameState.reloadTimer -= delta;
 
-    if (this.modelManager.gunActions.length > 0 && gameState.shootTimer <= 0 && !gameState.isReloading) {
+    // Do not let the walking/idle animation interrupt the firing animation.
+    // Player movement is still processed independently in updateMovement().
+    if (
+      this.modelManager.gunActions.length > 0 &&
+      gameState.shootTimer <= 0 &&
+      !gameState.isReloading &&
+      !gameState.isShooting
+    ) {
       weaponManager.playGunAction(inputManager.isWalking() ? 2 : 0);
     }
   }
@@ -805,7 +1009,11 @@ class Game {
     this.updateWeapon(delta);
     this.updateAnimations(delta);
     this.weatherManager.updateRain();
-    this.enemyManager.updateZombie(delta);
+    if (this.multiplayer.isHost) {
+      this.enemyManager.updateZombie(delta);
+      this.multiplayer.sendZombieSnapshot(this.createZombieSnapshot());
+    }
+    this.multiplayer.sendPlayerState(this.sceneManager.camera, this.gameState.health);
     this.lightingManager.updateFlashlight();
     this.uiManager.updateUI(this.modelManager);
 
@@ -1197,8 +1405,15 @@ function main() {
   elements.container.style.display = "none";
 
   let game: Game | null = null;
+  const multiplayer = new MultiplayerManager();
 
-  elements.startButton.addEventListener("click", () => {
+  elements.startButton.addEventListener("click", async () => {
+    try {
+      await multiplayer.showLobby();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "تعذر الاتصال بسيرفر اللعب الجماعي");
+      return;
+    }
     elements.startScreen.style.display = "none";
     elements.loadingScreen.style.display = "flex";
     elements.container.style.display = "block";
@@ -1207,7 +1422,7 @@ function main() {
       elements.loadingScreen.style.display = "none";
       showClickToPlay(async () => {
         if (!game) {
-          game = new Game(loadingManager);
+          game = new Game(loadingManager, multiplayer);
           (window as any).game = game;
         }
 
@@ -1223,7 +1438,7 @@ function main() {
       });
     });
 
-    game = new Game(loadingManager);
+    game = new Game(loadingManager, multiplayer);
     (window as any).game = game;
   });
 }
