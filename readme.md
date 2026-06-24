@@ -1,93 +1,216 @@
-# 🧟‍♂️ Zeta Forces: Zombie Shooter
+# Shadow Strike: Adaptive Multiplayer Zombie FPS
 
-![Zeta Forces Screenshot](./public/image.webp)
+![Game Screenshot](./public/image.webp)
 
-> **Made in Three.js** • Survive the outbreak • Restore the lights • Return to base
-
----
-
-## 🎮 About the Game
-
-Welcome to **Zeta Airbase**, soldier.
-A deadly virus has turned everyone into zombies, and it’s up to **you** to restore order.
-
-Your mission:
-
-* Eliminate all the zombies.
-* Fix the electric box to restore power to the sector.
-* Return to base alive.
-
-This isn't just survival—this is a **last stand**.
+A browser-based 3D cooperative zombie shooter built with Three.js, featuring adaptive enemy intelligence, online multiplayer rooms, synchronized gameplay, and mission-based progression.
 
 ---
 
-## 🚀 Play the Game
+## About the Game
 
-> [💥 Click to play now](https://www.zombiestrike.monster/)
+Enter a hostile military sector overrun by infected enemies.
 
----
+Your team must survive the outbreak, eliminate the remaining zombies, restore power to the sector, and return safely to the extraction point.
 
-## 🌟 Please Star the Project!
-
-If you enjoyed the game or appreciate the effort, a ⭐ on this repository would mean a lot!
+The game can be played solo or cooperatively with another player through a private room code.
 
 ---
 
-## 👨‍💻 Made By
+## Mission Objectives
 
-* **Rohan Vashisht** —
-  Programmer, map designer, game designer, voice actor, and the one who brought everything to life.
-
-* **Alok Nair** —
-  Music & sound manager, asset researcher, gameplay tester, and gave invaluable feedback on various fixes.
-
----
-
-## 🔊 Credits
-
-### 🎵 Music
-
-* **Karl Casey @ White Bat Audio** – [YouTube](https://www.youtube.com/@WhiteBatAudio)
-
-### 🎧 Sound Effects
-
-* **Pixabay** – [pixabay.com](https://pixabay.com)
+* Enter the infected sector.
+* Eliminate all hostile zombies.
+* Restore power using the electrical control box.
+* Survive the second enemy wave.
+* Return to the extraction point.
+* Complete the mission with your teammate.
 
 ---
 
-## 🧱 Assets Used
+## Key Features
 
-All models are from Sketchfab and used under their respective licenses:
+* Online two-player cooperative gameplay.
+* Private multiplayer rooms using shareable room codes.
+* Real-time player movement synchronization.
+* Shared mission progress between players.
+* Synchronized zombie elimination.
+* Adaptive enemy behavior based on player performance.
+* Enemy difficulty changes according to:
 
-* [Zombie Hazmat](https://sketchfab.com/3d-models/zombie-hazmat-49b3b4307f6a4d2386fdb02354158d04#download)
-* [FPS AK-74M + Animations](https://sketchfab.com/3d-models/fps-ak-74m-animations-94be8385c402474cacd39bc096c6ca14)
-* [Fence](https://sketchfab.com/3d-models/fence-0adbc93269c94b70b99d0627a3ee54f5)
-* [Wall + Door](https://sketchfab.com/3d-models/wall-door-19mb-cac51dfd82784736a726bba118e86de9)
-* [Sandbags](https://sketchfab.com/3d-models/sand-bags-e02685e0047948aabc75227cb1962d05#download)
-* [Police Car (Low Poly)](https://sketchfab.com/3d-models/prototipo-speciale-police-95-low-poly-model-63aa215521334cef9c4d8c4c391252ad)
-* [Crashed Abandoned Car](https://sketchfab.com/3d-models/crashed-abandoned-car-game-ready-66ef51a84c9843dda53bf0b4b9020011#download)
-* [Electric Box](https://sketchfab.com/3d-models/electric-box-c7bba1e774d94e67b410e4c9fdfdee34#download)
-* [WWII Air Traffic Control Tower](https://sketchfab.com/3d-models/wwii-air-trafic-control-tower-9e7f035ed7f4449593ad1bebe6ac71b1)
-* [PSX Style Brick Wall](https://sketchfab.com/3d-models/psx-style-brick-wall-80e53aac4eaa4aa99750f2429a4fe9f2#download)
-
----
-
-## 🛠️ Tech Stack
-
-* **Three.js** – 3D rendering
-* **GLTF Models** – Game-ready assets
-* **Web Audio API** – Sound playback
-* **Vanilla JavaScript** – Pure and performant
-* **Vite** – Fast bundler for development
+  * Shooting accuracy.
+  * Elimination speed.
+  * Player health.
+  * Damage received.
+* Simultaneous movement and shooting.
+* Automatic weapon reload.
+* First-person weapon animations.
+* Dynamic lighting and flashlight mechanics.
+* Environmental rain and spatial zombie audio.
+* Mission checkpoints with success and failure states.
+* Responsive HUD for ammunition, health, and mission progress.
 
 ---
 
-## 📫 Contact
+## Adaptive Enemy AI
 
-Have feedback, suggestions, or want to collaborate?
-Open a Pull request or create an issue.
+The game includes a dynamic difficulty system that continuously evaluates player performance.
+
+When the player performs well, enemies may:
+
+* Move faster.
+* Become more aggressive.
+* Cause increased damage.
+* Detect the player from greater distances.
+* Apply greater pressure during combat.
+
+When the player is struggling, the system gradually reduces enemy difficulty to maintain balanced gameplay.
+
+This creates a different experience depending on the skill and performance of each player.
+
 ---
 
-> 💀 *"Welcome to Zeta Airbase. It’s you vs the horde. Let’s see what you’re made of, soldier."*
+## Multiplayer System
+
+Players can create or join private cooperative rooms.
+
+### Create a Room
+
+1. Select **Create Room**.
+2. Copy the generated room code.
+3. Share the code with the second player.
+4. Wait for the second player to join.
+5. Start the mission.
+
+### Join a Room
+
+1. Select **Join Room**.
+2. Enter the room code.
+3. Wait for the room host to start the game.
+
+The multiplayer system is implemented using Socket.IO and a Node.js server.
 
 ---
+
+## Controls
+
+| Action            | Control           |
+| ----------------- | ----------------- |
+| Move forward      | W                 |
+| Move backward     | S                 |
+| Move left         | A                 |
+| Move right        | D                 |
+| Shoot             | Left Mouse Button |
+| Reload            | R                 |
+| Toggle flashlight | F                 |
+| Look around       | Mouse             |
+
+Movement and shooting can be performed simultaneously.
+
+---
+
+## Technology Stack
+
+* TypeScript
+* Three.js
+* Socket.IO
+* Node.js
+* Express
+* Vite
+* GLTF 3D Models
+* Web Audio API
+* Adaptive Difficulty System
+* Real-Time Multiplayer Synchronization
+
+---
+
+## Project Enhancements
+
+This version introduces substantial gameplay and technical improvements, including:
+
+* Adaptive enemy artificial intelligence.
+* Player-performance tracking.
+* Dynamic enemy speed, damage, and aggression.
+* Two-player online cooperative mode.
+* Room creation and room-code joining.
+* Multiplayer waiting room.
+* Host-controlled game start.
+* Real-time position and combat synchronization.
+* Multiplayer server connectivity handling.
+* Improved simultaneous movement and shooting.
+* Expanded mission and user-interface systems.
+
+---
+
+## Project Structure
+
+```text
+├── public/
+├── AdaptiveDifficulty.ts
+├── MultiplayerManager.ts
+├── main.ts
+├── server.ts
+├── index.html
+├── package.json
+└── render.yaml
+```
+
+## Development
+
+### Enhanced and Extended By
+
+**Jori Baaljahr** , **Jood Khamjan**
+
+Implemented the adaptive enemy AI, multiplayer room system, real-time synchronization, waiting-room flow, network connectivity improvements, and gameplay enhancements included in this version.
+
+---
+
+## Original Project Foundation
+
+This project is an extensively modified and expanded version of the original **Zeta Forces: Zombie Shooter** project.
+
+Original development credits:
+
+* **Rohan Vashisht** — original programming, map design, game design, and voice work.
+* **Alok Nair** — original music and sound management, asset research, testing, and feedback.
+
+Original repository:
+
+```text
+https://github.com/RohanVashisht1234/threejs-zombieshooter-game
+```
+
+---
+
+## Third-Party Assets and Credits
+
+The project contains third-party models, audio, and libraries that remain subject to their respective licenses and attribution requirements.
+
+### Music
+
+* Karl Casey — White Bat Audio
+
+### Sound Effects
+
+* Pixabay
+
+### 3D Assets
+
+* Zombie Hazmat
+* FPS AK-74M with animations
+* Fence
+* Wall and Door
+* Sandbags
+* Low-poly police car
+* Crashed abandoned car
+* Electrical control box
+* WWII air traffic control tower
+* PSX-style brick wall
+
+Detailed model sources and licenses should be retained in the project documentation or asset attribution file.
+
+---
+
+## Disclaimer
+
+This repository contains original enhancements together with modified third-party code and assets. Ownership of external libraries, models, sounds, and original project components remains with their respective creators.
+
