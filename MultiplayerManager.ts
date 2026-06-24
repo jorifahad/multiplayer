@@ -30,8 +30,19 @@ export class MultiplayerManager {
   private zombieHitHandler?: (index: number) => void;
   private zombieSnapshotHandler?: (snapshot: ZombieSnapshot) => void;
 
-  constructor(serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001') {
-    this.socket = io(serverUrl, { transports: ['websocket', 'polling'] });
+  constructor(serverUrl?: string) {
+    const configuredUrl = import.meta.env.VITE_SERVER_URL?.trim();
+    const automaticLocalUrl = `${window.location.protocol}//${window.location.hostname}:3001`;
+    const resolvedServerUrl = serverUrl || configuredUrl || automaticLocalUrl;
+
+    this.socket = io(resolvedServerUrl, {
+      transports: ['polling', 'websocket'],
+      autoConnect: false,
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 500,
+      timeout: 10000
+    });
 
     this.socket.on('player-state', (state: PlayerNetState) => this.playerStateHandler?.(state));
     this.socket.on('player-left', (id: string) => this.playerLeftHandler?.(id));
@@ -102,13 +113,19 @@ export class MultiplayerManager {
         this.socket.off('room-error', onRoomError);
       };
 
+      let finished = false;
       const finish = (data: RoomReady) => {
+        if (finished) return;
+        finished = true;
         this.roomCode = data.roomCode;
         this.seed = data.seed;
         this.hostId = data.hostId;
         cleanup();
-        overlay.remove();
-        resolve(data);
+        status.textContent = 'تم بدء المهمة. جاري تحميل اللعبة...';
+        window.setTimeout(() => {
+          overlay.remove();
+          resolve(data);
+        }, 250);
       };
 
       const onRoomCreated = (data: RoomReady) => {
@@ -145,8 +162,18 @@ export class MultiplayerManager {
         status.textContent = 'دخل اللاعب الثاني. اضغطي Start Game عندما تكونان مستعدين.';
       };
 
-      const onRoomStarted = (data: RoomReady) => {
-        finish(data);
+      const onRoomStarted = (data?: Partial<RoomReady>) => {
+        const room = pendingRoom;
+        if (!room) {
+          status.textContent = 'بدأت الغرفة، لكن بياناتها غير مكتملة. أعيدي الدخول.';
+          return;
+        }
+        finish({
+          roomCode: data?.roomCode || room.roomCode,
+          seed: data?.seed ?? room.seed,
+          hostId: data?.hostId || room.hostId,
+          playerId: data?.playerId || this.socket.id || room.playerId
+        });
       };
 
       const onRoomError = (message: string) => {
@@ -193,17 +220,60 @@ export class MultiplayerManager {
         startButton.disabled = true;
         startButton.textContent = 'Starting...';
         status.textContent = 'Starting game for both players...';
-        this.socket.emit('start-room');
+
+        const fallback = window.setTimeout(() => {
+          if (finished) return;
+          startButton.disabled = false;
+          startButton.textContent = 'Start Game';
+          status.textContent = 'لم يصل تأكيد البدء. اضغطي Start Game مرة أخرى.';
+        }, 7000);
+
+        this.socket.emit('start-room', (response?: { ok: boolean; message?: string }) => {
+          if (response?.ok) return;
+          window.clearTimeout(fallback);
+          startButton.disabled = false;
+          startButton.textContent = 'Start Game';
+          status.textContent = response?.message || 'تعذر بدء الغرفة.';
+        });
       };
     });
   }
 
   private waitForConnection(): Promise<void> {
     if (this.socket.connected) return Promise.resolve();
+
     return new Promise((resolve, reject) => {
-      const timer = window.setTimeout(() => reject(new Error('Multiplayer server is not reachable')), 10000);
-      this.socket.once('connect', () => { clearTimeout(timer); resolve(); });
-      this.socket.once('connect_error', () => { clearTimeout(timer); reject(new Error('Multiplayer server is not reachable')); });
+      let lastError = '';
+
+      const cleanup = () => {
+        window.clearTimeout(timer);
+        this.socket.off('connect', onConnect);
+        this.socket.off('connect_error', onConnectError);
+      };
+
+      const onConnect = () => {
+        cleanup();
+        resolve();
+      };
+
+      // لا نفشل من أول محاولة؛ Socket.IO قد يفشل WebSocket ثم ينجح عبر polling.
+      const onConnectError = (error: Error) => {
+        lastError = error.message;
+        console.warn('Multiplayer connection attempt failed:', error.message);
+      };
+
+      const timer = window.setTimeout(() => {
+        cleanup();
+        reject(new Error(
+          lastError
+            ? `Multiplayer server is not reachable: ${lastError}`
+            : 'Multiplayer server is not reachable'
+        ));
+      }, 12000);
+
+      this.socket.on('connect', onConnect);
+      this.socket.on('connect_error', onConnectError);
+      this.socket.connect();
     });
   }
 

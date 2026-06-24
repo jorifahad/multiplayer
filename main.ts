@@ -633,6 +633,13 @@ class InputManager {
       e.preventDefault();
     }
 
+    // Space can be held to fire while W/A/S/D remain pressed.
+    if (e.code === 'Space') {
+      e.preventDefault();
+      this.gameState.isShooting = true;
+      return;
+    }
+
     if (e.code === 'KeyR' && this.weaponManager.canReload()) {
       this.weaponManager.playGunAction(7);
     } else if (e.code === 'KeyF' && !e.repeat) {
@@ -643,6 +650,10 @@ class InputManager {
 
   private onKeyUp = (e: KeyboardEvent): void => {
     this.gameState.keysPressed[e.code] = false;
+    if (e.code === 'Space') {
+      e.preventDefault();
+      this.gameState.isShooting = false;
+    }
   }
 
   private onPointerDown = (e: PointerEvent): void => {
@@ -1454,6 +1465,7 @@ function showClickToPlay(onClick: () => void) {
     <div style="font-size:2rem">Click to Play</div>
     <div style="font-size:1.2rem;margin-top:1.5rem;text-align:center">
       Use <b>W A S D</b> to move<br/><br/>
+      Hold <b>SPACE</b> or Left Click to shoot<br/><br/>
       Press <b>R</b> to reload<br/><br/>
       Press <b>F</b> to toggle flashlight
     </div>

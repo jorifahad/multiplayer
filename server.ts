@@ -15,7 +15,7 @@ const io = new Server(httpServer, {
   cors: { origin: CLIENT_ORIGIN === '*' ? true : CLIENT_ORIGIN, methods: ['GET', 'POST'] }
 });
 
-type RoomInfo = { hostId: string; seed: number; players: Set<string> };
+type RoomInfo = { hostId: string; seed: number; players: Set<string>; started: boolean };
 const rooms = new Map<string, RoomInfo>();
 
 function makeCode(): string {
@@ -31,7 +31,7 @@ io.on('connection', (socket) => {
   socket.on('create-room', () => {
     const roomCode = makeCode();
     const seed = Math.floor(Math.random() * 2_000_000_000);
-    rooms.set(roomCode, { hostId: socket.id, seed, players: new Set([socket.id]) });
+    rooms.set(roomCode, { hostId: socket.id, seed, players: new Set([socket.id]), started: false });
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
     socket.emit('room-created', { roomCode, seed, hostId: socket.id, playerId: socket.id });
@@ -49,19 +49,35 @@ io.on('connection', (socket) => {
     socket.to(roomCode).emit('player-joined', socket.id);
   });
 
-  socket.on('start-room', () => {
+  socket.on('start-room', (ack?: (response: { ok: boolean; message?: string }) => void) => {
     const roomCode = socket.data.roomCode;
     const room = rooms.get(roomCode);
-    if (!room) return socket.emit('room-error', 'الغرفة غير موجودة');
-    if (socket.id !== room.hostId) return socket.emit('room-error', 'فقط صاحب الغرفة يستطيع بدء اللعبة');
-    if (room.players.size < 2) return socket.emit('room-error', 'بانتظار دخول اللاعب الثاني');
+    if (!room) {
+      ack?.({ ok: false, message: 'الغرفة غير موجودة' });
+      return socket.emit('room-error', 'الغرفة غير موجودة');
+    }
+    if (socket.id !== room.hostId) {
+      ack?.({ ok: false, message: 'فقط صاحب الغرفة يستطيع بدء اللعبة' });
+      return socket.emit('room-error', 'فقط صاحب الغرفة يستطيع بدء اللعبة');
+    }
+    if (room.players.size < 2) {
+      ack?.({ ok: false, message: 'بانتظار دخول اللاعب الثاني' });
+      return socket.emit('room-error', 'بانتظار دخول اللاعب الثاني');
+    }
 
-    io.to(roomCode).emit('room-started', {
-      roomCode,
-      seed: room.seed,
-      hostId: room.hostId,
-      playerId: ''
-    });
+    room.started = true;
+    ack?.({ ok: true });
+
+    // Send a separate start payload to every socket so both players always
+    // receive their own player id and leave the waiting room together.
+    for (const playerId of room.players) {
+      io.to(playerId).emit('room-started', {
+        roomCode,
+        seed: room.seed,
+        hostId: room.hostId,
+        playerId
+      });
+    }
   });
 
   socket.on('player-state', (state) => {
