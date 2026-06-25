@@ -294,9 +294,9 @@ export class MultiplayerManager {
     });
   }
 
-  public sendPlayerState(camera: THREE.PerspectiveCamera, health: number): void {
+  public sendPlayerState(camera: THREE.PerspectiveCamera, health: number, force = false): void {
     const now = performance.now();
-    if (now - this.lastPlayerSend < 50 || !this.roomCode) return;
+    if ((!force && now - this.lastPlayerSend < 50) || !this.roomCode) return;
     this.lastPlayerSend = now;
     this.socket.emit('player-state', {
       position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },

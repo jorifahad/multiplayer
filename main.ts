@@ -464,11 +464,19 @@ class EnemyManager {
       }
       const livingTargets = targets.filter(target => target.health > 0);
       if (!livingTargets.length) continue;
+      // Compare players using horizontal X/Z distance only. Camera and soldier
+      // models have different Y heights, so 3D distance can prevent attacks.
+      const horizontalDistanceTo = (position: THREE.Vector3): number => {
+        const dx = position.x - zombie.position.x;
+        const dz = position.z - zombie.position.z;
+        return Math.hypot(dx, dz);
+      };
+
       let target = livingTargets[0];
-      let distance = zombie.position.distanceTo(target.position);
+      let distance = horizontalDistanceTo(target.position);
       for (let targetIndex = 1; targetIndex < livingTargets.length; targetIndex++) {
         const candidate = livingTargets[targetIndex];
-        const candidateDistance = zombie.position.distanceTo(candidate.position);
+        const candidateDistance = horizontalDistanceTo(candidate.position);
         if (candidateDistance < distance) {
           target = candidate;
           distance = candidateDistance;
@@ -508,11 +516,14 @@ class EnemyManager {
           this.moveVec.addScaledVector(this.flankVec, zombieSpeed * delta * 0.8);
         }
 
-        if (distance > CONFIG.ZOMBIE.MIN_DISTANCE) {
+        // A slightly wider melee radius makes attacks reliable for both the
+        // first-person camera and the teammate soldier model.
+        const attackDistance = Math.max(1.15, CONFIG.ZOMBIE.MIN_DISTANCE);
+        if (distance > attackDistance) {
           zombie.position.add(this.moveVec);
           zombie.lookAt(target.position.x, zombie.position.y, target.position.z);
         } else if (remainingCooldown <= 0) {
-          const damage = damageRate;
+          const damage = Math.max(1, damageRate);
           this.attackCooldowns.set(i, 0.8);
           if (target.local) {
             this.gameState.health = Math.max(0, this.gameState.health - damage);
@@ -860,6 +871,10 @@ class Game {
       if (this.gameState.health <= 0) return;
       this.gameState.health = Math.max(0, this.gameState.health - amount);
       this.adaptiveDifficulty.recordDamage(amount, this.gameState.health);
+
+      // Publish lethal damage immediately so the host stops targeting the
+      // dead teammate without waiting for the next regular state interval.
+      this.multiplayer.sendPlayerState(this.sceneManager.camera, this.gameState.health, true);
     });
 
     this.multiplayer.onZombieHit((index) => {
@@ -1364,14 +1379,34 @@ function playReloadSound() {
 }
 
 // Positional zombie audio functions
-async function loadZombieAudioBuffer() {
-  if (!zombieAudioContext) {
-    zombieAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-  }
+async function loadZombieAudioBuffer(): Promise<void> {
+  try {
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextCtor) {
+      console.warn('Web Audio API is not supported on this device. Continuing without zombie audio.');
+      return;
+    }
 
-  const response = await fetch('/zombie.ogg');
-  const arrayBuffer = await response.arrayBuffer();
-  zombieAudioBuffer = await zombieAudioContext.decodeAudioData(arrayBuffer);
+    if (!zombieAudioContext) {
+      zombieAudioContext = new AudioContextCtor();
+    }
+
+    if (zombieAudioContext.state === 'suspended') {
+      await zombieAudioContext.resume().catch(() => undefined);
+    }
+
+    const response = await fetch('/zombie.ogg');
+    if (!response.ok) {
+      throw new Error(`Zombie audio request failed: ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    zombieAudioBuffer = await zombieAudioContext.decodeAudioData(arrayBuffer);
+  } catch (error) {
+    // Audio failure must never prevent the game/render loop from starting.
+    console.warn('Zombie audio could not be loaded. Continuing without it.', error);
+    zombieAudioBuffer = null;
+  }
 }
 
 function playZombieSoundAt(position: THREE.Vector3, camera: THREE.PerspectiveCamera) {
@@ -1585,6 +1620,8 @@ function main() {
           }
         });
 
+        // Some mobile browsers can reject AudioContext or audio decoding.
+        // Always start the game even when zombie audio is unavailable.
         await loadZombieAudioBuffer();
         game.startAfterLoading();
       });
@@ -1595,7 +1632,7 @@ function main() {
   });
 }
 
-function showClickToPlay(onClick: () => void) {
+function showClickToPlay(onClick: () => void | Promise<void>) {
   const overlay = document.createElement('div');
   overlay.style.cssText =
     'position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.7);' +
@@ -1612,9 +1649,22 @@ function showClickToPlay(onClick: () => void) {
     </div>
   `;
 
-  overlay.addEventListener('click', () => {
-    overlay.remove();
-    onClick();
+  let starting = false;
+  overlay.addEventListener('click', async () => {
+    if (starting) return;
+    starting = true;
+
+    const title = overlay.firstElementChild as HTMLElement | null;
+    if (title) title.textContent = 'Starting game...';
+
+    try {
+      await onClick();
+      overlay.remove();
+    } catch (error) {
+      console.error('Game startup failed:', error);
+      starting = false;
+      if (title) title.textContent = 'تعذر بدء اللعبة — اضغطي للمحاولة مرة أخرى';
+    }
   });
 
   document.body.appendChild(overlay);
