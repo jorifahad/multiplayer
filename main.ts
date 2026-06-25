@@ -1330,76 +1330,61 @@ class Game {
 
   private spawnZombiesFromGLTF(gltf: any, count: number): void {
     const { modelManager, sceneManager } = this;
-    const { minX, maxX, minZ, maxZ } = GAME_BOUNDS;
+    const { minX, maxX, minZ } = GAME_BOUNDS;
 
-    // Build several shuffled spawn sectors instead of repeatedly sampling the
-    // same narrow corridor. The second wave is therefore scattered across
-    // the area rather than appearing as a straight row.
-    const columns = 5;
+    // This function is used for the second zombie wave. Spawn the entire wave
+    // beyond the front gate, ahead of both players, so enemies never appear
+    // behind them when the new stage begins.
+    const gateZ = -400;
+    const spawnMinZ = Math.max(minZ + 1.5, gateZ - 21.5);
+    const spawnMaxZ = gateZ - 5.5;
+    const spawnMinX = minX + 1.5;
+    const spawnMaxX = maxX - 1.5;
+
+    const columns = Math.max(5, Math.ceil(Math.sqrt(count * 1.8)));
     const rows = Math.max(1, Math.ceil(count / columns));
-    const marginX = 2.5;
-    const marginZ = 10;
-    const cellWidth = (maxX - minX - marginX * 2) / columns;
-    const cellDepth = (maxZ - minZ - marginZ * 2) / rows;
+    const cellWidth = (spawnMaxX - spawnMinX) / columns;
+    const cellDepth = (spawnMaxZ - spawnMinZ) / rows;
     const positions: THREE.Vector3[] = [];
 
     for (let row = 0; row < rows && positions.length < count; row++) {
-      const rowIndices = Array.from({ length: columns }, (_, i) => i)
+      const shuffledColumns = Array.from({ length: columns }, (_, index) => index)
         .sort(() => Math.random() - 0.5);
 
-      for (const column of rowIndices) {
+      for (const column of shuffledColumns) {
         if (positions.length >= count) break;
 
-        let candidate = new THREE.Vector3();
-        let accepted = false;
-        for (let attempt = 0; attempt < 30; attempt++) {
-          const baseX = minX + marginX + (column + 0.5) * cellWidth;
-          const baseZ = minZ + marginZ + (row + 0.5) * cellDepth;
-          const x = clamp(baseX + THREE.MathUtils.randFloatSpread(cellWidth * 0.8), minX + 1, maxX - 1);
-          const z = clamp(baseZ + THREE.MathUtils.randFloatSpread(Math.max(6, cellDepth * 0.8)), minZ + 2, maxZ - 2);
-          candidate.set(x, 0.05, z);
+        const baseX = spawnMinX + (column + 0.5) * cellWidth;
+        const baseZ = spawnMinZ + (row + 0.5) * cellDepth;
 
-          const farFromExisting = positions.every(pos => pos.distanceTo(candidate) >= 4.5);
-          const farFromLocal = Math.hypot(
-            candidate.x - this.sceneManager.camera.position.x,
-            candidate.z - this.sceneManager.camera.position.z
-          ) >= 14;
-          const farFromRemote = Array.from(this.remotePlayers.values()).every(player =>
-            Math.hypot(candidate.x - player.position.x, candidate.z - player.position.z) >= 14
-          );
+        const x = clamp(
+          baseX + THREE.MathUtils.randFloatSpread(Math.max(0.4, cellWidth * 0.72)),
+          spawnMinX,
+          spawnMaxX
+        );
+        const z = clamp(
+          baseZ + THREE.MathUtils.randFloatSpread(Math.max(0.35, cellDepth * 0.65)),
+          spawnMinZ,
+          spawnMaxZ
+        );
 
-          if (farFromExisting && farFromLocal && farFromRemote) {
-            accepted = true;
-            break;
-          }
-        }
-
-        if (!accepted) {
-          // Fallback still uses the current grid cell, so even a crowded map
-          // cannot place the whole wave in one queue.
-          candidate.set(
-            clamp(minX + marginX + (column + Math.random()) * cellWidth, minX + 1, maxX - 1),
-            0.05,
-            clamp(minZ + marginZ + (row + Math.random()) * cellDepth, minZ + 2, maxZ - 2)
-          );
-        }
-        positions.push(candidate.clone());
+        positions.push(new THREE.Vector3(x, 0.05, z));
       }
     }
 
-    // Shuffle the final order so zombie indexes do not correspond to visible
-    // map rows or columns.
+    // Randomize indexes while keeping every zombie behind the front gate.
     positions.sort(() => Math.random() - 0.5);
 
     for (let i = 0; i < count; i++) {
       const model = SkeletonUtils.clone(gltf.scene);
       model.scale.set(1.5, 1.5, 1.5);
-      model.position.copy(positions[i] ?? new THREE.Vector3(
-        THREE.MathUtils.randFloat(minX + 1, maxX - 1),
-        0.05,
-        THREE.MathUtils.randFloat(minZ + 2, maxZ - 2)
-      ));
-      model.rotation.y = THREE.MathUtils.randFloat(-Math.PI, Math.PI);
+
+      const fallbackX = THREE.MathUtils.randFloat(spawnMinX, spawnMaxX);
+      const fallbackZ = THREE.MathUtils.randFloat(spawnMinZ, spawnMaxZ);
+      model.position.copy(positions[i] ?? new THREE.Vector3(fallbackX, 0.05, fallbackZ));
+
+      // Face roughly toward the gate/player side when the wave appears.
+      model.rotation.y = THREE.MathUtils.randFloat(-0.35, 0.35);
       model.traverse(child => child.castShadow = child.receiveShadow = true);
 
       const mixer = new THREE.AnimationMixer(model);
@@ -1413,8 +1398,7 @@ class Game {
       modelManager.zombieStates.push({ health: 3, dead: false, dying: false, deathTimer: 0 });
       sceneManager.scene.add(model);
     }
-  }
-}
+  }}
 
 // -- Audio and main code unchanged from your original (not shown for brevity) --
 
