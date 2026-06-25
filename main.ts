@@ -104,7 +104,7 @@ class LightingManager {
   }
 }
 
-type ZombieState = { health: number; dead: boolean; dying: boolean; deathTimer: number; };
+type ZombieState = { health: number; dead: boolean; dying: boolean; deathTimer: number; fadeTimer?: number; };
 
 class ModelManager {
   public zombieMixers: THREE.AnimationMixer[] = [];
@@ -411,7 +411,9 @@ class WeaponManager {
     if (state.health <= 0) {
       state.health = 0;
       state.dying = true;
-      state.deathTimer = 2;
+      state.deathTimer = 0.9;
+      state.fadeTimer = 0;
+      state['deathAnimStarted'] = false;
       this.adaptiveDifficulty.recordKill();
       this.modelManager.zombieMixers[index]?.stopAllAction();
     }
@@ -585,26 +587,43 @@ class EnemyManager {
   private processDyingZombie(zombie: THREE.Object3D, state: any, delta: number): void {
     if (!state['deathAnimStarted']) {
       const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(zombie.quaternion);
-      const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), forward).normalize();
+      const right = new THREE.Vector3()
+        .crossVectors(new THREE.Vector3(0, 1, 0), forward)
+        .normalize();
+
       state['fallAxis'] = right;
       state['fallRot'] = 0;
       state['fallTarget'] = THREE.MathUtils.degToRad(THREE.MathUtils.randInt(70, 90));
       state['fallDirection'] = 1;
       state['deathAnimStarted'] = true;
+
+      const index = this.modelManager.zombies.indexOf(zombie);
+      this.modelManager.zombieMixers[index]?.stopAllAction();
     }
 
-    const fallSpeed = THREE.MathUtils.degToRad(120) * delta;
-    let rotateAmount = fallSpeed * state['fallDirection'];
-    if (Math.abs(state['fallRot'] + rotateAmount) > state['fallTarget']) {
-      rotateAmount = state['fallTarget'] * state['fallDirection'] - state['fallRot'];
-    }
-    zombie.rotateOnWorldAxis(state['fallAxis'], rotateAmount);
-    state['fallRot'] += Math.abs(rotateAmount);
+    if (state['fallRot'] < state['fallTarget']) {
+      const fallSpeed = THREE.MathUtils.degToRad(120) * delta;
+      const remaining = state['fallTarget'] - state['fallRot'];
+      const rotateAmount = Math.min(fallSpeed, remaining);
 
-    if (state['fallRot'] >= state['fallTarget'] - 0.001) {
-      state.dying = false;
-      state.dead = true;
+      zombie.rotateOnWorldAxis(state['fallAxis'], rotateAmount * state['fallDirection']);
+      state['fallRot'] += rotateAmount;
+      zombie.position.y = Math.max(-0.12, zombie.position.y - delta * 0.22);
+      return;
     }
+
+    // Stay on the ground briefly, then disappear cleanly.
+    // We do not fade materials because shared/transparent materials caused
+    // living zombies to become invisible while their shadows remained.
+    state.deathTimer = Math.max(0, Number(state.deathTimer || 0) - delta);
+    if (state.deathTimer > 0) return;
+
+    state.dying = false;
+    state.dead = true;
+    zombie.visible = false;
+    zombie.traverse((child: any) => {
+      if (child.isMesh) child.castShadow = false;
+    });
   }
 }
 
@@ -1016,12 +1035,19 @@ class Game {
         x: z.position.x,
         y: z.position.y,
         z: z.position.z,
-        ry: z.rotation.y
+        ry: z.rotation.y,
+        qx: z.quaternion.x,
+        qy: z.quaternion.y,
+        qz: z.quaternion.z,
+        qw: z.quaternion.w,
+        visible: z.visible
       })),
       states: this.modelManager.zombieStates.map(s => ({
         health: s.health,
         dead: s.dead,
-        dying: s.dying
+        dying: s.dying,
+        deathTimer: s.deathTimer,
+        fadeTimer: 0
       }))
     };
   }
@@ -1031,20 +1057,31 @@ class Game {
       const zombie = this.modelManager.zombies[i];
       const state = this.modelManager.zombieStates[i];
       if (!zombie || !state) return;
-
       zombie.position.set(p.x, p.y, p.z);
-      zombie.rotation.y = p.ry;
+
+      if (
+        Number.isFinite(p.qx) &&
+        Number.isFinite(p.qy) &&
+        Number.isFinite(p.qz) &&
+        Number.isFinite(p.qw)
+      ) {
+        zombie.quaternion.set(p.qx!, p.qy!, p.qz!, p.qw!);
+      } else {
+        zombie.rotation.y = p.ry;
+      }
 
       const incoming = snapshot.states[i];
       if (!incoming) return;
-
       state.health = incoming.health;
       state.dead = incoming.dead;
       state.dying = incoming.dying;
+      state.deathTimer = incoming.deathTimer ?? state.deathTimer;
+      state.fadeTimer = 0;
+      zombie.visible = p.visible ?? !incoming.dead;
 
-      zombie.visible = !incoming.dead;
       zombie.traverse((child: any) => {
-        if (child.isMesh) child.castShadow = !incoming.dead;
+        if (!child.isMesh) return;
+        child.castShadow = zombie.visible;
       });
     });
   }
