@@ -1057,17 +1057,33 @@ class Game {
       const zombie = this.modelManager.zombies[i];
       const state = this.modelManager.zombieStates[i];
       if (!zombie || !state) return;
-      zombie.position.set(p.x, p.y, p.z);
 
+      // Store network targets instead of teleporting the zombie directly to
+      // every received position. The render loop moves it smoothly toward
+      // these targets, preventing sudden jumps in front of the second player.
+      let targetPosition = zombie.userData.networkTargetPosition as THREE.Vector3 | undefined;
+      if (!targetPosition) {
+        targetPosition = new THREE.Vector3(p.x, p.y, p.z);
+        zombie.userData.networkTargetPosition = targetPosition;
+        zombie.position.copy(targetPosition);
+      } else {
+        targetPosition.set(p.x, p.y, p.z);
+      }
+
+      let targetQuaternion = zombie.userData.networkTargetQuaternion as THREE.Quaternion | undefined;
+      if (!targetQuaternion) {
+        targetQuaternion = new THREE.Quaternion();
+        zombie.userData.networkTargetQuaternion = targetQuaternion;
+      }
       if (
         Number.isFinite(p.qx) &&
         Number.isFinite(p.qy) &&
         Number.isFinite(p.qz) &&
         Number.isFinite(p.qw)
       ) {
-        zombie.quaternion.set(p.qx!, p.qy!, p.qz!, p.qw!);
+        targetQuaternion.set(p.qx!, p.qy!, p.qz!, p.qw!);
       } else {
-        zombie.rotation.y = p.ry;
+        targetQuaternion.setFromEuler(new THREE.Euler(0, p.ry, 0));
       }
 
       const incoming = snapshot.states[i];
@@ -1077,13 +1093,42 @@ class Game {
       state.dying = incoming.dying;
       state.deathTimer = incoming.deathTimer ?? state.deathTimer;
       state.fadeTimer = 0;
-      zombie.visible = p.visible ?? !incoming.dead;
 
-      zombie.traverse((child: any) => {
-        if (!child.isMesh) return;
-        child.castShadow = zombie.visible;
-      });
+      const shouldBeVisible = p.visible ?? !incoming.dead;
+      if (zombie.visible !== shouldBeVisible) {
+        zombie.visible = shouldBeVisible;
+        zombie.traverse((child: any) => {
+          if (child.isMesh) child.castShadow = shouldBeVisible;
+        });
+      }
     });
+  }
+
+  private smoothRemoteZombieSnapshots(delta: number): void {
+    if (this.multiplayer.isHost) return;
+
+    // Frame-rate independent smoothing. Movement is also capped so a delayed
+    // packet cannot make a zombie jump across the map in one frame.
+    const positionBlend = 1 - Math.exp(-14 * delta);
+    const rotationBlend = 1 - Math.exp(-18 * delta);
+    const maxStep = 10 * delta;
+
+    for (const zombie of this.modelManager.zombies) {
+      const targetPosition = zombie.userData.networkTargetPosition as THREE.Vector3 | undefined;
+      if (targetPosition) {
+        const distance = zombie.position.distanceTo(targetPosition);
+        if (distance > 0.001) {
+          const step = Math.min(maxStep, distance * positionBlend);
+          zombie.position.addScaledVector(
+            new THREE.Vector3().subVectors(targetPosition, zombie.position).normalize(),
+            step
+          );
+        }
+      }
+
+      const targetQuaternion = zombie.userData.networkTargetQuaternion as THREE.Quaternion | undefined;
+      if (targetQuaternion) zombie.quaternion.slerp(targetQuaternion, rotationBlend);
+    }
   }
 
   private loadCheckpoint(): void {
@@ -1238,6 +1283,7 @@ class Game {
       }
     }
 
+    this.smoothRemoteZombieSnapshots(delta);
     this.updateAnimations(delta);
     this.weatherManager.updateRain();
 
