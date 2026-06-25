@@ -104,7 +104,7 @@ class LightingManager {
   }
 }
 
-type ZombieState = { health: number; dead: boolean; dying: boolean; deathTimer: number; fadeTimer?: number; };
+type ZombieState = { health: number; dead: boolean; dying: boolean; deathTimer: number; };
 
 class ModelManager {
   public zombieMixers: THREE.AnimationMixer[] = [];
@@ -164,7 +164,16 @@ class ModelManager {
         } while (++attempts < 20);
 
         model.position.set(x, 0.05, z);
-        model.traverse(child => child.castShadow = child.receiveShadow = true);
+        model.traverse((child: any) => {
+          if (!child.isMesh) return;
+          if (Array.isArray(child.material)) {
+            child.material = child.material.map((material: THREE.Material) => material.clone());
+          } else if (child.material) {
+            child.material = child.material.clone();
+          }
+          child.castShadow = true;
+          child.receiveShadow = true;
+        });
         const mixer = new THREE.AnimationMixer(model);
         const action = mixer.clipAction(gltf.animations[3]);
         action.play();
@@ -402,9 +411,7 @@ class WeaponManager {
     if (state.health <= 0) {
       state.health = 0;
       state.dying = true;
-      state.deathTimer = 0.75;
-      state.fadeTimer = 0.45;
-      state['deathAnimStarted'] = false;
+      state.deathTimer = 2;
       this.adaptiveDifficulty.recordKill();
       this.modelManager.zombieMixers[index]?.stopAllAction();
     }
@@ -578,51 +585,25 @@ class EnemyManager {
   private processDyingZombie(zombie: THREE.Object3D, state: any, delta: number): void {
     if (!state['deathAnimStarted']) {
       const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(zombie.quaternion);
-      const right = new THREE.Vector3()
-        .crossVectors(new THREE.Vector3(0, 1, 0), forward)
-        .normalize();
-
+      const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), forward).normalize();
       state['fallAxis'] = right;
       state['fallRot'] = 0;
-      state['fallTarget'] = THREE.MathUtils.degToRad(82);
-      state['fallDirection'] = Math.random() < 0.5 ? -1 : 1;
+      state['fallTarget'] = THREE.MathUtils.degToRad(THREE.MathUtils.randInt(70, 90));
+      state['fallDirection'] = 1;
       state['deathAnimStarted'] = true;
-
-      const index = this.modelManager.zombies.indexOf(zombie);
-      this.modelManager.zombieMixers[index]?.stopAllAction();
     }
 
-    if (state['fallRot'] < state['fallTarget']) {
-      const fallSpeed = THREE.MathUtils.degToRad(210) * delta;
-      const remaining = state['fallTarget'] - state['fallRot'];
-      const rotateAmount = Math.min(fallSpeed, remaining);
-
-      zombie.rotateOnWorldAxis(state['fallAxis'], rotateAmount * state['fallDirection']);
-      state['fallRot'] += rotateAmount;
-      zombie.position.y = Math.max(-0.12, zombie.position.y - delta * 0.22);
-      return;
+    const fallSpeed = THREE.MathUtils.degToRad(120) * delta;
+    let rotateAmount = fallSpeed * state['fallDirection'];
+    if (Math.abs(state['fallRot'] + rotateAmount) > state['fallTarget']) {
+      rotateAmount = state['fallTarget'] * state['fallDirection'] - state['fallRot'];
     }
+    zombie.rotateOnWorldAxis(state['fallAxis'], rotateAmount);
+    state['fallRot'] += Math.abs(rotateAmount);
 
-    state.deathTimer = Math.max(0, Number(state.deathTimer || 0) - delta);
-    if (state.deathTimer > 0) return;
-
-    state.fadeTimer = Math.max(0, Number(state.fadeTimer ?? 0.45) - delta);
-    const opacity = Math.max(0, state.fadeTimer / 0.45);
-
-    zombie.traverse((child: any) => {
-      if (!child.isMesh || !child.material) return;
-      const materials = Array.isArray(child.material) ? child.material : [child.material];
-      for (const material of materials) {
-        material.transparent = true;
-        material.opacity = opacity;
-        material.depthWrite = opacity > 0.15;
-      }
-    });
-
-    if (state.fadeTimer <= 0) {
+    if (state['fallRot'] >= state['fallTarget'] - 0.001) {
       state.dying = false;
       state.dead = true;
-      zombie.visible = false;
     }
   }
 }
@@ -830,6 +811,7 @@ class Game {
   private missionStage: MissionStage = 1;
   private appliedMissionStage: MissionStage = 1;
   private lastDifficultyReport = 0;
+  private lastZombieSnapshotSent = 0;
 
   private sceneManager: SceneManager;
   private gameState: GameState;
@@ -1034,19 +1016,12 @@ class Game {
         x: z.position.x,
         y: z.position.y,
         z: z.position.z,
-        ry: z.rotation.y,
-        qx: z.quaternion.x,
-        qy: z.quaternion.y,
-        qz: z.quaternion.z,
-        qw: z.quaternion.w,
-        visible: z.visible
+        ry: z.rotation.y
       })),
       states: this.modelManager.zombieStates.map(s => ({
         health: s.health,
         dead: s.dead,
-        dying: s.dying,
-        deathTimer: s.deathTimer,
-        fadeTimer: s.fadeTimer ?? 0.45
+        dying: s.dying
       }))
     };
   }
@@ -1056,42 +1031,20 @@ class Game {
       const zombie = this.modelManager.zombies[i];
       const state = this.modelManager.zombieStates[i];
       if (!zombie || !state) return;
-      zombie.position.set(p.x, p.y, p.z);
 
-      if (
-        Number.isFinite(p.qx) &&
-        Number.isFinite(p.qy) &&
-        Number.isFinite(p.qz) &&
-        Number.isFinite(p.qw)
-      ) {
-        zombie.quaternion.set(p.qx!, p.qy!, p.qz!, p.qw!);
-      } else {
-        zombie.rotation.y = p.ry;
-      }
+      zombie.position.set(p.x, p.y, p.z);
+      zombie.rotation.y = p.ry;
 
       const incoming = snapshot.states[i];
       if (!incoming) return;
+
       state.health = incoming.health;
       state.dead = incoming.dead;
       state.dying = incoming.dying;
-      state.deathTimer = incoming.deathTimer ?? state.deathTimer;
-      state.fadeTimer = incoming.fadeTimer ?? state.fadeTimer;
-      zombie.visible = p.visible ?? !incoming.dead;
 
-      const opacity = incoming.dead
-        ? 0
-        : incoming.dying
-          ? Math.max(0, Math.min(1, (incoming.fadeTimer ?? 0.45) / 0.45))
-          : 1;
-
+      zombie.visible = !incoming.dead;
       zombie.traverse((child: any) => {
-        if (!child.isMesh || !child.material) return;
-        const materials = Array.isArray(child.material) ? child.material : [child.material];
-        for (const material of materials) {
-          material.transparent = opacity < 1;
-          material.opacity = opacity;
-          material.depthWrite = opacity > 0.15;
-        }
+        if (child.isMesh) child.castShadow = !incoming.dead;
       });
     });
   }
@@ -1253,14 +1206,20 @@ class Game {
 
     // The host remains authoritative even after dying, so zombies keep
     // moving toward the surviving player and snapshots keep being sent.
+    const now = performance.now();
+
     if (this.multiplayer.isHost) {
       this.enemyManager.updateZombie(delta);
-      this.multiplayer.sendZombieSnapshot(this.createZombieSnapshot());
+
+      // Sending every zombie every frame caused network and CPU lag.
+      // About 12 updates per second is enough for smooth co-op movement.
+      if (now - this.lastZombieSnapshotSent >= 80) {
+        this.lastZombieSnapshotSent = now;
+        this.multiplayer.sendZombieSnapshot(this.createZombieSnapshot());
+      }
     }
 
     this.multiplayer.sendPlayerState(this.sceneManager.camera, this.gameState.health);
-
-    const now = performance.now();
     if (now - this.lastDifficultyReport >= 750) {
       this.lastDifficultyReport = now;
       this.multiplayer.sendDifficultyReport(this.adaptiveDifficulty.getLocalDifficultyLevel());
@@ -1454,7 +1413,16 @@ class Game {
 
       // Face roughly toward the gate/player side when the wave appears.
       model.rotation.y = THREE.MathUtils.randFloat(-0.35, 0.35);
-      model.traverse(child => child.castShadow = child.receiveShadow = true);
+      model.traverse((child: any) => {
+        if (!child.isMesh) return;
+        if (Array.isArray(child.material)) {
+          child.material = child.material.map((material: THREE.Material) => material.clone());
+        } else if (child.material) {
+          child.material = child.material.clone();
+        }
+        child.castShadow = true;
+        child.receiveShadow = true;
+      });
 
       const mixer = new THREE.AnimationMixer(model);
       const action = mixer.clipAction(gltf.animations[3]);
