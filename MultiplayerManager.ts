@@ -63,6 +63,10 @@ export class MultiplayerManager {
     this.socket.on('shared-difficulty', ({ level }: { level: number }) => {
       this.sharedDifficultyHandler?.(Math.max(0.2, Math.min(1, Number(level) || 0.5)));
     });
+
+    this.socket.on('host-changed', ({ hostId }: { hostId: string }) => {
+      if (hostId) this.hostId = hostId;
+    });
   }
 
   public get playerId(): string { return this.socket.id || ''; }

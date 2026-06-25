@@ -23,6 +23,7 @@ type RoomInfo = {
   started: boolean;
   missionStage: MissionStage;
   difficultyByPlayer: Map<string, number>;
+  healthByPlayer: Map<string, number>;
 };
 
 const rooms = new Map<string, RoomInfo>();
@@ -52,7 +53,8 @@ io.on('connection', (socket) => {
       players: new Set([socket.id]),
       started: false,
       missionStage: 1,
-      difficultyByPlayer: new Map([[socket.id, 0.5]])
+      difficultyByPlayer: new Map([[socket.id, 0.5]]),
+      healthByPlayer: new Map([[socket.id, 100]])
     });
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
@@ -62,11 +64,12 @@ io.on('connection', (socket) => {
   socket.on('join-room', (rawCode: string) => {
     const roomCode = String(rawCode || '').toUpperCase();
     const room = rooms.get(roomCode);
-    if (!room) return socket.emit('room-error', 'الغرفة غير موجودة');
-    if (room.players.size >= 2) return socket.emit('room-error', 'الغرفة ممتلئة');
+    if (!room) return socket.emit('room-error', 'Room not found');
+    if (room.players.size >= 2) return socket.emit('room-error', 'Room is full');
 
     room.players.add(socket.id);
     room.difficultyByPlayer.set(socket.id, 0.5);
+    room.healthByPlayer.set(socket.id, 100);
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
     socket.emit('room-joined', { roomCode, seed: room.seed, hostId: room.hostId, playerId: socket.id });
@@ -77,16 +80,16 @@ io.on('connection', (socket) => {
     const roomCode = socket.data.roomCode;
     const room = rooms.get(roomCode);
     if (!room) {
-      ack?.({ ok: false, message: 'الغرفة غير موجودة' });
-      return socket.emit('room-error', 'الغرفة غير موجودة');
+      ack?.({ ok: false, message: 'Room not found' });
+      return socket.emit('room-error', 'Room not found');
     }
     if (socket.id !== room.hostId) {
-      ack?.({ ok: false, message: 'فقط صاحب الغرفة يستطيع بدء اللعبة' });
-      return socket.emit('room-error', 'فقط صاحب الغرفة يستطيع بدء اللعبة');
+      ack?.({ ok: false, message: 'Only the host can start the game' });
+      return socket.emit('room-error', 'Only the host can start the game');
     }
     if (room.players.size < 2) {
-      ack?.({ ok: false, message: 'بانتظار دخول اللاعب الثاني' });
-      return socket.emit('room-error', 'بانتظار دخول اللاعب الثاني');
+      ack?.({ ok: false, message: 'Waiting for the second player' });
+      return socket.emit('room-error', 'Waiting for the second player');
     }
 
     room.started = true;
@@ -108,7 +111,24 @@ io.on('connection', (socket) => {
 
   socket.on('player-state', (state) => {
     const roomCode = socket.data.roomCode;
-    if (roomCode) socket.to(roomCode).emit('player-state', { ...state, id: socket.id });
+    const room = rooms.get(roomCode);
+    if (!room || !room.players.has(socket.id)) return;
+
+    const health = Math.max(0, Number(state?.health) || 0);
+    room.healthByPlayer.set(socket.id, health);
+
+    socket.to(roomCode).emit('player-state', { ...state, health, id: socket.id });
+
+    if (socket.id === room.hostId && health <= 0) {
+      const nextHostId = [...room.players].find((playerId) =>
+        playerId !== socket.id && (room.healthByPlayer.get(playerId) ?? 0) > 0
+      );
+
+      if (nextHostId) {
+        room.hostId = nextHostId;
+        io.to(roomCode).emit('host-changed', { hostId: nextHostId });
+      }
+    }
   });
 
   socket.on('shot', (data) => {
@@ -173,14 +193,22 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomCode);
     if (!room) return;
 
+    const disconnectedWasHost = socket.id === room.hostId;
+
     room.players.delete(socket.id);
     room.difficultyByPlayer.delete(socket.id);
+    room.healthByPlayer.delete(socket.id);
     socket.to(roomCode).emit('player-left', socket.id);
 
-    if (room.players.size === 0 || socket.id === room.hostId) {
-      io.to(roomCode).emit('room-error', 'صاحب الغرفة خرج');
+    if (room.players.size === 0) {
       rooms.delete(roomCode);
       return;
+    }
+
+    if (disconnectedWasHost) {
+      const nextHostId = [...room.players][0];
+      room.hostId = nextHostId;
+      io.to(roomCode).emit('host-changed', { hostId: nextHostId });
     }
 
     emitSharedDifficulty(roomCode, room);

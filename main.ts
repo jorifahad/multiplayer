@@ -1161,6 +1161,7 @@ class Game {
       this.gameState.keysPressed = {};
       if (!this.localDeathHandled) {
         this.localDeathHandled = true;
+        this.multiplayer.sendPlayerState(this.sceneManager.camera, 0, true);
         showMissionFailedOverlay();
       }
     }
