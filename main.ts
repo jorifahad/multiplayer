@@ -644,14 +644,8 @@ class UIManager {
 }
 
 class InputManager {
-  constructor(
-    private gameState: GameState,
-    private weaponManager: WeaponManager,
-    private lightingManager: LightingManager,
-    private controls: PointerLockControls
-  ) {
-    // Each key is tracked independently, so combinations such as
-    // W + D + Space and S + A + mouse fire work at the same time.
+  constructor(private gameState: GameState, private weaponManager: WeaponManager, private lightingManager: LightingManager, private controls: PointerLockControls) {
+    // Keyboard and mouse are handled independently so movement and firing can happen together.
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('pointerdown', this.onPointerDown);
@@ -661,27 +655,21 @@ class InputManager {
     document.body.addEventListener('click', this.onClick);
   }
 
-  private refreshShootingState(): void {
-    this.gameState.isShooting = Boolean(
-      this.gameState.keysPressed['Space'] ||
-      this.gameState.keysPressed['KeyE'] ||
-      this.gameState.keysPressed['MouseLeft']
-    );
-  }
-
   private onKeyDown = (e: KeyboardEvent): void => {
     this.gameState.keysPressed[e.code] = true;
 
-    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'KeyE'].includes(e.code)) {
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(e.code)) {
       e.preventDefault();
     }
 
-    if (e.code === 'Space' || e.code === 'KeyE') {
-      this.refreshShootingState();
+    // Space can be held to fire while W/A/S/D remain pressed.
+    if (e.code === 'Space') {
+      e.preventDefault();
+      this.gameState.isShooting = true;
       return;
     }
 
-    if (e.code === 'KeyR' && !e.repeat && this.weaponManager.canReload()) {
+    if (e.code === 'KeyR' && this.weaponManager.canReload()) {
       this.weaponManager.playGunAction(7);
     } else if (e.code === 'KeyF' && !e.repeat) {
       this.gameState.flashlightOn = !this.gameState.flashlightOn;
@@ -691,32 +679,29 @@ class InputManager {
 
   private onKeyUp = (e: KeyboardEvent): void => {
     this.gameState.keysPressed[e.code] = false;
-
-    if (e.code === 'Space' || e.code === 'KeyE') {
+    if (e.code === 'Space') {
       e.preventDefault();
-      this.refreshShootingState();
+      this.gameState.isShooting = false;
     }
   }
 
   private onPointerDown = (e: PointerEvent): void => {
     if (e.button !== 0) return;
 
-    // First click only captures the mouse. After that, holding the left
-    // mouse button fires even while several movement keys are held.
+    // First click locks the mouse. Following clicks shoot, including while W/A/S/D are held.
     if (!this.controls.isLocked) {
       this.controls.lock();
       return;
     }
 
     e.preventDefault();
-    this.gameState.keysPressed['MouseLeft'] = true;
-    this.refreshShootingState();
+    this.gameState.isShooting = true;
   }
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (e.button !== 0) return;
-    this.gameState.keysPressed['MouseLeft'] = false;
-    this.refreshShootingState();
+    if (e.button === 0) {
+      this.gameState.isShooting = false;
+    }
   }
 
   private onClick = (): void => {
@@ -725,8 +710,7 @@ class InputManager {
 
   private onPointerLockChange = (): void => {
     if (!this.controls.isLocked) {
-      this.gameState.keysPressed['MouseLeft'] = false;
-      this.refreshShootingState();
+      this.gameState.isShooting = false;
     }
   }
 
@@ -736,8 +720,8 @@ class InputManager {
   }
 
   public isWalking(): boolean {
-    const keys = this.gameState.keysPressed;
-    return Boolean(keys['KeyW'] || keys['KeyA'] || keys['KeyS'] || keys['KeyD']);
+    const { keysPressed } = this.gameState;
+    return Boolean(keysPressed['KeyW'] || keysPressed['KeyA'] || keysPressed['KeyS'] || keysPressed['KeyD']);
   }
 }
 
@@ -783,6 +767,7 @@ class Game {
   private checkpoint3Triggered = false;
   private originalZombieCount = CONFIG.ZOMBIE.COUNT;
   private clock = new THREE.Clock();
+  private localDeathHandled = false;
 
   private breathingAmplitude = 0.02;
   private breathingSpeed = 3;
@@ -1110,32 +1095,49 @@ class Game {
 
   private animate(): void {
     requestAnimationFrame(() => this.animate());
-    const delta = this.clock.getDelta();
-    this.updateMovement(delta);
-    this.updateWeapon(delta);
+    const delta = Math.min(this.clock.getDelta(), 0.05);
+    const playerAlive = this.gameState.health > 0;
+
+    // A dead player becomes a spectator. Their own controls stop, but the
+    // render loop, multiplayer updates and host zombie simulation continue.
+    // This prevents the surviving teammate's match from freezing.
+    if (playerAlive) {
+      this.updateMovement(delta);
+      this.updateWeapon(delta);
+    } else {
+      this.gameState.isShooting = false;
+      this.gameState.keysPressed = {};
+      if (!this.localDeathHandled) {
+        this.localDeathHandled = true;
+        showMissionFailedOverlay();
+      }
+    }
+
     this.updateAnimations(delta);
     this.weatherManager.updateRain();
+
+    // The host remains authoritative even after dying, so zombies keep
+    // moving toward the surviving player and snapshots keep being sent.
     if (this.multiplayer.isHost) {
       this.enemyManager.updateZombie(delta);
       this.multiplayer.sendZombieSnapshot(this.createZombieSnapshot());
     }
+
     this.multiplayer.sendPlayerState(this.sceneManager.camera, this.gameState.health);
     this.lightingManager.updateFlashlight();
     this.uiManager.updateUI(this.modelManager);
 
-    if (this.gameState.health <= 0) {
-      showMissionFailedOverlay();
-      return;
+    if (playerAlive) {
+      this.checkCheckpoint();
+      this.checkSecondCheckpoint();
+      this.checkThirdCheckpoint();
     }
-
-    this.checkCheckpoint();
-    this.checkSecondCheckpoint();
-    this.checkThirdCheckpoint();
 
     if (this.checkpoint2Triggered) {
       this.updateNearbyStreetLights();
     }
 
+    // Always render, including after local death.
     this.composer.render();
   }
 
@@ -1485,7 +1487,16 @@ function showSubtitle(text: string, duration: number) {
 
 // Game overlays
 function showMissionFailedOverlay() {
-  document.getElementById("mission-failed-overlay")!.style.display = "block";
+  const overlay = document.getElementById("mission-failed-overlay");
+  if (!overlay) return;
+  overlay.style.display = "block";
+
+  // Make it clear that only this player is down; the teammate can continue.
+  const title = overlay.querySelector("h1, h2, .title");
+  if (title) title.textContent = "YOU ARE DOWN";
+  const message = overlay.querySelector("p, .message");
+  if (message) message.textContent = "Your teammate can continue the mission.";
+
   document.exitPointerLock?.();
 }
 
@@ -1561,7 +1572,6 @@ function showClickToPlay(onClick: () => void) {
     <div style="font-size:1.2rem;margin-top:1.5rem;text-align:center">
       Use <b>W A S D</b> to move<br/><br/>
       Hold <b>SPACE</b> or Left Click to shoot<br/><br/>
-      Hold <b>Space</b>, <b>E</b>, or left mouse to shoot<br/><br/>
       Press <b>R</b> to reload<br/><br/>
       Press <b>F</b> to toggle flashlight
     </div>
