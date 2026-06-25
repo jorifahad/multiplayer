@@ -14,7 +14,7 @@ const CONFIG = {
   CAMERA: { FOV: 55, NEAR: 0.1, FAR: 1000, INITIAL_POSITION: { x: 0, y: 2, z: 10 } },
   RENDERER: { PIXEL_RATIO_MAX: 1.5 },
   MOVEMENT: { SPEED: 10 },
-  WEAPON: { MAX_AMMO: 40, SHOOT_COOLDOWN: 0.15, RELOAD_TIME: 3.5, MUZZLE_FLASH_DURATION: 50 },
+  WEAPON: { MAX_AMMO: 40, SHOOT_COOLDOWN: 0.15, RELOAD_TIME: 1.6, MUZZLE_FLASH_DURATION: 50 },
   ZOMBIE: { SPEED: 5, DAMAGE_RATE: 20, MIN_DISTANCE: 1.5, COUNT: 50 },
   RAIN: { COUNT: 500, FALL_SPEED_MIN: 0.3, FALL_SPEED_MAX: 0.8, SPAWN_RANGE: 25, HEIGHT_MIN: 60, HEIGHT_MAX: 100 },
   BULLET: { SPEED: 10, MAX_DISTANCE: 1000 },
@@ -104,7 +104,7 @@ class LightingManager {
   }
 }
 
-type ZombieState = { health: number; dead: boolean; dying: boolean; deathTimer: number; };
+type ZombieState = { health: number; dead: boolean; dying: boolean; deathTimer: number; fadeTimer?: number; };
 
 class ModelManager {
   public zombieMixers: THREE.AnimationMixer[] = [];
@@ -402,7 +402,9 @@ class WeaponManager {
     if (state.health <= 0) {
       state.health = 0;
       state.dying = true;
-      state.deathTimer = 2;
+      state.deathTimer = 0.75;
+      state.fadeTimer = 0.45;
+      state['deathAnimStarted'] = false;
       this.adaptiveDifficulty.recordKill();
       this.modelManager.zombieMixers[index]?.stopAllAction();
     }
@@ -576,25 +578,51 @@ class EnemyManager {
   private processDyingZombie(zombie: THREE.Object3D, state: any, delta: number): void {
     if (!state['deathAnimStarted']) {
       const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(zombie.quaternion);
-      const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), forward).normalize();
+      const right = new THREE.Vector3()
+        .crossVectors(new THREE.Vector3(0, 1, 0), forward)
+        .normalize();
+
       state['fallAxis'] = right;
       state['fallRot'] = 0;
-      state['fallTarget'] = THREE.MathUtils.degToRad(THREE.MathUtils.randInt(70, 90));
-      state['fallDirection'] = 1;
+      state['fallTarget'] = THREE.MathUtils.degToRad(82);
+      state['fallDirection'] = Math.random() < 0.5 ? -1 : 1;
       state['deathAnimStarted'] = true;
+
+      const index = this.modelManager.zombies.indexOf(zombie);
+      this.modelManager.zombieMixers[index]?.stopAllAction();
     }
 
-    const fallSpeed = THREE.MathUtils.degToRad(120) * delta;
-    let rotateAmount = fallSpeed * state['fallDirection'];
-    if (Math.abs(state['fallRot'] + rotateAmount) > state['fallTarget']) {
-      rotateAmount = state['fallTarget'] * state['fallDirection'] - state['fallRot'];
-    }
-    zombie.rotateOnWorldAxis(state['fallAxis'], rotateAmount);
-    state['fallRot'] += Math.abs(rotateAmount);
+    if (state['fallRot'] < state['fallTarget']) {
+      const fallSpeed = THREE.MathUtils.degToRad(210) * delta;
+      const remaining = state['fallTarget'] - state['fallRot'];
+      const rotateAmount = Math.min(fallSpeed, remaining);
 
-    if (state['fallRot'] >= state['fallTarget'] - 0.001) {
+      zombie.rotateOnWorldAxis(state['fallAxis'], rotateAmount * state['fallDirection']);
+      state['fallRot'] += rotateAmount;
+      zombie.position.y = Math.max(-0.12, zombie.position.y - delta * 0.22);
+      return;
+    }
+
+    state.deathTimer = Math.max(0, Number(state.deathTimer || 0) - delta);
+    if (state.deathTimer > 0) return;
+
+    state.fadeTimer = Math.max(0, Number(state.fadeTimer ?? 0.45) - delta);
+    const opacity = Math.max(0, state.fadeTimer / 0.45);
+
+    zombie.traverse((child: any) => {
+      if (!child.isMesh || !child.material) return;
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of materials) {
+        material.transparent = true;
+        material.opacity = opacity;
+        material.depthWrite = opacity > 0.15;
+      }
+    });
+
+    if (state.fadeTimer <= 0) {
       state.dying = false;
       state.dead = true;
+      zombie.visible = false;
     }
   }
 }
@@ -1003,10 +1031,22 @@ class Game {
   private createZombieSnapshot(): ZombieSnapshot {
     return {
       positions: this.modelManager.zombies.map(z => ({
-        x: z.position.x, y: z.position.y, z: z.position.z, ry: z.rotation.y
+        x: z.position.x,
+        y: z.position.y,
+        z: z.position.z,
+        ry: z.rotation.y,
+        qx: z.quaternion.x,
+        qy: z.quaternion.y,
+        qz: z.quaternion.z,
+        qw: z.quaternion.w,
+        visible: z.visible
       })),
       states: this.modelManager.zombieStates.map(s => ({
-        health: s.health, dead: s.dead, dying: s.dying
+        health: s.health,
+        dead: s.dead,
+        dying: s.dying,
+        deathTimer: s.deathTimer,
+        fadeTimer: s.fadeTimer ?? 0.45
       }))
     };
   }
@@ -1017,13 +1057,42 @@ class Game {
       const state = this.modelManager.zombieStates[i];
       if (!zombie || !state) return;
       zombie.position.set(p.x, p.y, p.z);
-      zombie.rotation.y = p.ry;
+
+      if (
+        Number.isFinite(p.qx) &&
+        Number.isFinite(p.qy) &&
+        Number.isFinite(p.qz) &&
+        Number.isFinite(p.qw)
+      ) {
+        zombie.quaternion.set(p.qx!, p.qy!, p.qz!, p.qw!);
+      } else {
+        zombie.rotation.y = p.ry;
+      }
+
       const incoming = snapshot.states[i];
       if (!incoming) return;
       state.health = incoming.health;
       state.dead = incoming.dead;
       state.dying = incoming.dying;
-      zombie.visible = !incoming.dead;
+      state.deathTimer = incoming.deathTimer ?? state.deathTimer;
+      state.fadeTimer = incoming.fadeTimer ?? state.fadeTimer;
+      zombie.visible = p.visible ?? !incoming.dead;
+
+      const opacity = incoming.dead
+        ? 0
+        : incoming.dying
+          ? Math.max(0, Math.min(1, (incoming.fadeTimer ?? 0.45) / 0.45))
+          : 1;
+
+      zombie.traverse((child: any) => {
+        if (!child.isMesh || !child.material) return;
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        for (const material of materials) {
+          material.transparent = opacity < 1;
+          material.opacity = opacity;
+          material.depthWrite = opacity > 0.15;
+        }
+      });
     });
   }
 
