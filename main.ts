@@ -912,6 +912,19 @@ class Game {
       this.adaptiveDifficulty.setSharedDifficultyLevel(level);
     });
 
+    this.multiplayer.onPlayerHealth((id, health) => {
+      if (health > 0) return;
+      const mesh = this.remotePlayers.get(id);
+      if (mesh) this.sceneManager.scene.remove(mesh);
+      this.remotePlayers.delete(id);
+    });
+
+    this.multiplayer.onHostChanged(() => {
+      // Clear any accumulated frame time and immediately resume the zombie
+      // simulation on whichever player is now authoritative.
+      this.clock.getDelta();
+    });
+
     this.multiplayer.onMissionStage((stage) => {
       this.missionStage = stage;
       this.applyMissionStage(stage);

@@ -33,6 +33,8 @@ export class MultiplayerManager {
   private zombieSnapshotHandler?: (snapshot: ZombieSnapshot) => void;
   private playerDamageHandler?: (amount: number, attackerId?: string) => void;
   private missionStageHandler?: (stage: MissionStage) => void;
+  private hostChangedHandler?: (hostId: string) => void;
+  private playerHealthHandler?: (id: string, health: number) => void;
   private sharedDifficultyHandler?: (level: number) => void;
 
   constructor(serverUrl?: string) {
@@ -65,7 +67,12 @@ export class MultiplayerManager {
     });
 
     this.socket.on('host-changed', ({ hostId }: { hostId: string }) => {
-      if (hostId) this.hostId = hostId;
+      if (!hostId) return;
+      this.hostId = hostId;
+      this.hostChangedHandler?.(hostId);
+    });
+    this.socket.on('player-health', ({ id, health }: { id: string; health: number }) => {
+      this.playerHealthHandler?.(id, Math.max(0, Number(health) || 0));
     });
   }
 
@@ -82,6 +89,8 @@ export class MultiplayerManager {
   public onPlayerDamage(handler: (amount: number, attackerId?: string) => void): void { this.playerDamageHandler = handler; }
   public onMissionStage(handler: (stage: MissionStage) => void): void { this.missionStageHandler = handler; }
   public onSharedDifficulty(handler: (level: number) => void): void { this.sharedDifficultyHandler = handler; }
+  public onHostChanged(handler: (hostId: string) => void): void { this.hostChangedHandler = handler; }
+  public onPlayerHealth(handler: (id: string, health: number) => void): void { this.playerHealthHandler = handler; }
 
   public async showLobby(): Promise<RoomReady> {
     await this.waitForConnection();

@@ -43,6 +43,22 @@ function emitSharedDifficulty(roomCode: string, room: RoomInfo): void {
   io.to(roomCode).emit('shared-difficulty', { level });
 }
 
+function promoteLivingHost(roomCode: string, room: RoomInfo): void {
+  const currentHealth = room.healthByPlayer.get(room.hostId) ?? 0;
+  if (currentHealth > 0 && room.players.has(room.hostId)) return;
+
+  const livingPlayer = [...room.players].find(
+    (playerId) => (room.healthByPlayer.get(playerId) ?? 0) > 0
+  );
+
+  // Fall back to any connected player so authority is never left empty.
+  const nextHostId = livingPlayer || [...room.players][0];
+  if (!nextHostId || nextHostId === room.hostId) return;
+
+  room.hostId = nextHostId;
+  io.to(roomCode).emit('host-changed', { hostId: nextHostId });
+}
+
 io.on('connection', (socket) => {
   socket.on('create-room', () => {
     const roomCode = makeCode();
@@ -119,16 +135,7 @@ io.on('connection', (socket) => {
 
     socket.to(roomCode).emit('player-state', { ...state, health, id: socket.id });
 
-    if (socket.id === room.hostId && health <= 0) {
-      const nextHostId = [...room.players].find((playerId) =>
-        playerId !== socket.id && (room.healthByPlayer.get(playerId) ?? 0) > 0
-      );
-
-      if (nextHostId) {
-        room.hostId = nextHostId;
-        io.to(roomCode).emit('host-changed', { hostId: nextHostId });
-      }
-    }
+    if (health <= 0) promoteLivingHost(roomCode, room);
   });
 
   socket.on('shot', (data) => {
@@ -140,10 +147,26 @@ io.on('connection', (socket) => {
     const roomCode = socket.data.roomCode;
     const room = rooms.get(roomCode);
     if (!room || !room.players.has(targetId)) return;
+
+    const safeAmount = Math.max(0, Number(amount) || 0);
+    const previousHealth = room.healthByPlayer.get(targetId) ?? 100;
+    const nextHealth = Math.max(0, previousHealth - safeAmount);
+    room.healthByPlayer.set(targetId, nextHealth);
+
+    // Deliver damage to the victim and publish their resulting health to the
+    // teammate immediately. Host migration no longer depends on the victim's
+    // browser successfully sending one more frame after death.
     io.to(targetId).emit('player-damage', {
-      amount: Math.max(0, Number(amount) || 0),
-      attackerId: socket.id
+      amount: safeAmount,
+      attackerId: socket.id,
+      health: nextHealth
     });
+    socket.to(roomCode).emit('player-health', {
+      id: targetId,
+      health: nextHealth
+    });
+
+    if (nextHealth <= 0) promoteLivingHost(roomCode, room);
   });
 
   socket.on('zombie-hit', ({ index }) => {
