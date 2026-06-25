@@ -89,7 +89,7 @@ export class MultiplayerManager {
       overlay.innerHTML = `
         <div style="width:min(460px,90vw);padding:28px;background:#151922;border:1px solid #394150;border-radius:16px;text-align:center">
           <h1 style="margin-top:0">Zeta Forces Co-op</h1>
-          <p>أنشئي غرفة أو أدخلي رمز صديقتك</p>
+          <p>Create a room or enter your teammate's code</p>
 
           <div id="lobby-actions">
             <button id="create-room" style="width:100%;padding:13px;margin:8px 0;font-size:17px;cursor:pointer">Create Room</button>
@@ -138,7 +138,7 @@ export class MultiplayerManager {
         this.seed = data.seed;
         this.hostId = data.hostId;
         cleanup();
-        status.textContent = 'تم بدء المهمة. جاري تحميل اللعبة...';
+        status.textContent = 'Mission started. Loading the game...';
         window.setTimeout(() => {
           overlay.remove();
           resolve(data);
@@ -155,7 +155,7 @@ export class MultiplayerManager {
         actions.style.display = 'none';
         hostPanel.style.display = 'block';
         hostCode.textContent = data.roomCode;
-        status.textContent = 'انسخي الرمز وأرسليه لصديقتك. اللعبة لن تبدأ حتى يدخل اللاعب الثاني.';
+        status.textContent = 'Copy the code and send it to your teammate. The game will not start until the second player joins.';
       };
 
       const onRoomJoined = (data: RoomReady) => {
@@ -166,7 +166,7 @@ export class MultiplayerManager {
         this.hostId = data.hostId;
 
         actions.style.display = 'none';
-        status.textContent = `تم دخول الغرفة ${data.roomCode}. بانتظار صاحب الغرفة لبدء اللعبة...`;
+        status.textContent = `Joined room ${data.roomCode}. Waiting for the host to start the game...`;
       };
 
       const onPlayerJoined = () => {
@@ -176,13 +176,13 @@ export class MultiplayerManager {
         startButton.style.cursor = 'pointer';
         startButton.style.opacity = '1';
         startButton.textContent = 'Start Game';
-        status.textContent = 'دخل اللاعب الثاني. اضغطي Start Game عندما تكونان مستعدين.';
+        status.textContent = 'Your teammate joined. Press Start Game when you are both ready.';
       };
 
       const onRoomStarted = (data?: Partial<RoomReady>) => {
         const room = pendingRoom;
         if (!room) {
-          status.textContent = 'بدأت الغرفة، لكن بياناتها غير مكتملة. أعيدي الدخول.';
+          status.textContent = 'The room started, but its data is incomplete. Please join again.';
           return;
         }
         finish({
@@ -210,7 +210,7 @@ export class MultiplayerManager {
 
       (overlay.querySelector('#join-room') as HTMLButtonElement).onclick = () => {
         const code = input.value.trim().toUpperCase();
-        if (!code) { status.textContent = 'اكتبي رمز الغرفة'; return; }
+        if (!code) { status.textContent = 'Enter the room code'; return; }
         status.textContent = 'Joining room...';
         this.socket.emit('join-room', code);
       };
@@ -242,7 +242,7 @@ export class MultiplayerManager {
           if (finished) return;
           startButton.disabled = false;
           startButton.textContent = 'Start Game';
-          status.textContent = 'لم يصل تأكيد البدء. اضغطي Start Game مرة أخرى.';
+          status.textContent = 'Start confirmation was not received. Press Start Game again.';
         }, 7000);
 
         this.socket.emit('start-room', (response?: { ok: boolean; message?: string }) => {
@@ -250,7 +250,7 @@ export class MultiplayerManager {
           window.clearTimeout(fallback);
           startButton.disabled = false;
           startButton.textContent = 'Start Game';
-          status.textContent = response?.message || 'تعذر بدء الغرفة.';
+          status.textContent = response?.message || 'Unable to start the room.';
         });
       };
     });
@@ -273,7 +273,7 @@ export class MultiplayerManager {
         resolve();
       };
 
-      // لا نفشل من أول محاولة؛ Socket.IO قد يفشل WebSocket ثم ينجح عبر polling.
+      // Do not fail on the first attempt; Socket.IO may fail WebSocket and then succeed through polling.
       const onConnectError = (error: Error) => {
         lastError = error.message;
         console.warn('Multiplayer connection attempt failed:', error.message);

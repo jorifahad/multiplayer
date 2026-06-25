@@ -1592,7 +1592,7 @@ function fadeAllBackgroundAudio(target: number, duration: number = 1000) {
 // Speech and subtitles
 function playSpeech(src: string, subtitle: string, duration: number, onEnd?: () => void) {
   fadeAllBackgroundAudio(0.3, 800);
-  showSubtitle(subtitle, duration);
+  if (subtitle.trim()) showSubtitle(subtitle, duration);
 
   const audio = setupAudio(src, 1.0, false);
   audio.autoplay = true;
@@ -1609,7 +1609,7 @@ function playSpeech(src: string, subtitle: string, duration: number, onEnd?: () 
 function playSpeechAudio1() {
   playSpeech(
     '/speech_audio_1.ogg',
-    "Zeta to Echo Unit, we lost Sector 7 to the infected. Head straight through the breach, clear out hostiles, and reach the electric box. Once it's fixed, streetlights'll light the whole damn sector. Move fast. We're counting on you.",
+    '',
     15000
   );
 }
@@ -1617,7 +1617,7 @@ function playSpeechAudio1() {
 function playSpeechAudio2(onEnd?: () => void) {
   playSpeech(
     '/speech_audio_2.ogg',
-    "Sector clear. Good work, Echo. Stand by for further orders.",
+    '',
     8000,
     onEnd
   );
@@ -1625,6 +1625,10 @@ function playSpeechAudio2(onEnd?: () => void) {
 
 function showSubtitle(text: string, duration: number) {
   const subtitleBox = document.getElementById('subtitle-box') as HTMLDivElement;
+  if (!subtitleBox || !text.trim()) {
+    if (subtitleBox) subtitleBox.style.display = 'none';
+    return;
+  }
   subtitleBox.textContent = text;
   subtitleBox.style.display = 'block';
 
