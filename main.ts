@@ -441,7 +441,7 @@ class EnemyManager {
     const settings = this.adaptiveDifficulty.getEnemySettings();
     const zombieSpeed = CONFIG.ZOMBIE.SPEED * settings.movementSpeedMultiplier;
     const damageRate = CONFIG.ZOMBIE.DAMAGE_RATE * settings.attackDamageMultiplier;
-    const avoidRadius = 1.0 * settings.separationMultiplier;
+    const avoidRadius = Math.max(1.8, 1.35 * settings.separationMultiplier);
     const states = this.modelManager.zombieStates;
     let firstAliveZombieIdx = zombies.findIndex((_, i) => !states[i].dead && !states[i].dying);
     this.manageSounds(firstAliveZombieIdx !== -1 ? zombies[firstAliveZombieIdx] : null);
@@ -483,7 +483,18 @@ class EnemyManager {
         }
       }
 
-      this.tempVec.subVectors(target.position, zombie.position);
+      // Give every zombie a stable side lane while approaching. This keeps
+      // large waves from collapsing into one straight queue behind each other.
+      const directToTarget = new THREE.Vector3().subVectors(target.position, zombie.position);
+      directToTarget.y = 0;
+      const laneOffset = ((i % 9) - 4) * 0.75;
+      const approachPoint = target.position.clone();
+      if (directToTarget.lengthSq() > 0.0001 && distance > 4) {
+        const side = new THREE.Vector3(-directToTarget.z, 0, directToTarget.x).normalize();
+        approachPoint.addScaledVector(side, laneOffset);
+      }
+
+      this.tempVec.subVectors(approachPoint, zombie.position);
       this.tempVec.y = 0;
       this.avoidVec.set(0, 0, 0);
       const remainingCooldown = Math.max(0, (this.attackCooldowns.get(i) || 0) - delta);
@@ -848,15 +859,27 @@ class Game {
 
   private setupMultiplayerEvents(): void {
     this.multiplayer.onPlayerState((state) => {
+      const health = Math.max(0, Number(state.health) || 0);
       let mesh = this.remotePlayers.get(state.id);
+
+      // A dead teammate disappears completely instead of remaining frozen as
+      // a standing soldier. Removing it from the map also prevents zombies
+      // from considering the dead player as a target.
+      if (health <= 0) {
+        if (mesh) this.sceneManager.scene.remove(mesh);
+        this.remotePlayers.delete(state.id);
+        return;
+      }
+
       if (!mesh) {
         mesh = this.createRemotePlayer();
         this.remotePlayers.set(state.id, mesh);
         this.sceneManager.scene.add(mesh);
       }
+      mesh.visible = true;
       mesh.position.set(state.position.x, state.position.y - 1, state.position.z);
       mesh.rotation.y = state.rotationY;
-      mesh.userData.health = state.health;
+      mesh.userData.health = health;
     });
 
     this.multiplayer.onPlayerLeft((id) => {
@@ -1294,28 +1317,81 @@ class Game {
   private spawnZombiesFromGLTF(gltf: any, count: number): void {
     const { modelManager, sceneManager } = this;
     const { minX, maxX, minZ, maxZ } = GAME_BOUNDS;
-    const initialPos = CONFIG.CAMERA.INITIAL_POSITION;
+
+    // Build several shuffled spawn sectors instead of repeatedly sampling the
+    // same narrow corridor. The second wave is therefore scattered across
+    // the area rather than appearing as a straight row.
+    const columns = 5;
+    const rows = Math.max(1, Math.ceil(count / columns));
+    const marginX = 2.5;
+    const marginZ = 10;
+    const cellWidth = (maxX - minX - marginX * 2) / columns;
+    const cellDepth = (maxZ - minZ - marginZ * 2) / rows;
+    const positions: THREE.Vector3[] = [];
+
+    for (let row = 0; row < rows && positions.length < count; row++) {
+      const rowIndices = Array.from({ length: columns }, (_, i) => i)
+        .sort(() => Math.random() - 0.5);
+
+      for (const column of rowIndices) {
+        if (positions.length >= count) break;
+
+        let candidate = new THREE.Vector3();
+        let accepted = false;
+        for (let attempt = 0; attempt < 30; attempt++) {
+          const baseX = minX + marginX + (column + 0.5) * cellWidth;
+          const baseZ = minZ + marginZ + (row + 0.5) * cellDepth;
+          const x = clamp(baseX + THREE.MathUtils.randFloatSpread(cellWidth * 0.8), minX + 1, maxX - 1);
+          const z = clamp(baseZ + THREE.MathUtils.randFloatSpread(Math.max(6, cellDepth * 0.8)), minZ + 2, maxZ - 2);
+          candidate.set(x, 0.05, z);
+
+          const farFromExisting = positions.every(pos => pos.distanceTo(candidate) >= 4.5);
+          const farFromLocal = Math.hypot(
+            candidate.x - this.sceneManager.camera.position.x,
+            candidate.z - this.sceneManager.camera.position.z
+          ) >= 14;
+          const farFromRemote = Array.from(this.remotePlayers.values()).every(player =>
+            Math.hypot(candidate.x - player.position.x, candidate.z - player.position.z) >= 14
+          );
+
+          if (farFromExisting && farFromLocal && farFromRemote) {
+            accepted = true;
+            break;
+          }
+        }
+
+        if (!accepted) {
+          // Fallback still uses the current grid cell, so even a crowded map
+          // cannot place the whole wave in one queue.
+          candidate.set(
+            clamp(minX + marginX + (column + Math.random()) * cellWidth, minX + 1, maxX - 1),
+            0.05,
+            clamp(minZ + marginZ + (row + Math.random()) * cellDepth, minZ + 2, maxZ - 2)
+          );
+        }
+        positions.push(candidate.clone());
+      }
+    }
+
+    // Shuffle the final order so zombie indexes do not correspond to visible
+    // map rows or columns.
+    positions.sort(() => Math.random() - 0.5);
 
     for (let i = 0; i < count; i++) {
       const model = SkeletonUtils.clone(gltf.scene);
       model.scale.set(1.5, 1.5, 1.5);
-      let x = 0, z = 0, attempts = 0;
-      const minSpawnDistance = 180;
-
-      do {
-        x = THREE.MathUtils.randFloat(minX, maxX);
-        z = THREE.MathUtils.randFloat(minZ, maxZ);
-        const distToPlayer = Math.hypot(x - initialPos.x, z - initialPos.z);
-        const tooCloseToOther = modelManager.zombies.some(zb => zb.position.distanceTo(new THREE.Vector3(x, 0.05, z)) < 2);
-        if (distToPlayer >= minSpawnDistance && !tooCloseToOther) break;
-      } while (++attempts < 20);
-
-      model.position.set(x, 0.05, z);
+      model.position.copy(positions[i] ?? new THREE.Vector3(
+        THREE.MathUtils.randFloat(minX + 1, maxX - 1),
+        0.05,
+        THREE.MathUtils.randFloat(minZ + 2, maxZ - 2)
+      ));
+      model.rotation.y = THREE.MathUtils.randFloat(-Math.PI, Math.PI);
       model.traverse(child => child.castShadow = child.receiveShadow = true);
+
       const mixer = new THREE.AnimationMixer(model);
       const action = mixer.clipAction(gltf.animations[3]);
       action.play();
-      action.timeScale = 2;
+      action.timeScale = THREE.MathUtils.randFloat(1.7, 2.3);
       action.time = Math.random() * action.getClip().duration;
 
       modelManager.zombieMixers.push(mixer);
