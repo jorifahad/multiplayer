@@ -423,12 +423,15 @@ class EnemyManager {
   private avoidVec = new THREE.Vector3();
   private moveVec = new THREE.Vector3();
   private flankVec = new THREE.Vector3();
+  private attackCooldowns = new Map<number, number>();
 
   constructor(
     private gameState: GameState,
     private modelManager: ModelManager,
     private camera: THREE.PerspectiveCamera,
-    private adaptiveDifficulty: AdaptiveDifficulty
+    private adaptiveDifficulty: AdaptiveDifficulty,
+    private multiplayer: MultiplayerManager,
+    private remotePlayers: Map<string, THREE.Object3D>
   ) { }
 
   public updateZombie(delta: number): void {
@@ -452,10 +455,31 @@ class EnemyManager {
       }
       if (state.dead) continue;
 
-      this.tempVec.subVectors(this.camera.position, zombie.position);
+      const targets: Array<{ id: string; position: THREE.Vector3; health: number; local: boolean }> = [
+        { id: this.multiplayer.playerId, position: this.camera.position, health: this.gameState.health, local: true }
+      ];
+      for (const [id, player] of this.remotePlayers) {
+        const health = Number(player.userData.health ?? 100);
+        if (health > 0) targets.push({ id, position: player.position, health, local: false });
+      }
+      const livingTargets = targets.filter(target => target.health > 0);
+      if (!livingTargets.length) continue;
+      let target = livingTargets[0];
+      let distance = zombie.position.distanceTo(target.position);
+      for (let targetIndex = 1; targetIndex < livingTargets.length; targetIndex++) {
+        const candidate = livingTargets[targetIndex];
+        const candidateDistance = zombie.position.distanceTo(candidate.position);
+        if (candidateDistance < distance) {
+          target = candidate;
+          distance = candidateDistance;
+        }
+      }
+
+      this.tempVec.subVectors(target.position, zombie.position);
       this.tempVec.y = 0;
-      const distance = this.tempVec.length();
       this.avoidVec.set(0, 0, 0);
+      const remainingCooldown = Math.max(0, (this.attackCooldowns.get(i) || 0) - delta);
+      this.attackCooldowns.set(i, remainingCooldown);
 
       for (let j = 0; j < zombies.length; j++) {
         if (i === j || states[j].dead || states[j].dying) continue;
@@ -486,11 +510,16 @@ class EnemyManager {
 
         if (distance > CONFIG.ZOMBIE.MIN_DISTANCE) {
           zombie.position.add(this.moveVec);
-          zombie.lookAt(this.camera.position.x, zombie.position.y, this.camera.position.z);
-        } else if (this.gameState.health > 0) {
-          const damage = damageRate * delta;
-          this.gameState.health = Math.max(0, this.gameState.health - damage);
-          this.adaptiveDifficulty.recordDamage(damage, this.gameState.health);
+          zombie.lookAt(target.position.x, zombie.position.y, target.position.z);
+        } else if (remainingCooldown <= 0) {
+          const damage = damageRate * 0.5;
+          this.attackCooldowns.set(i, 0.5);
+          if (target.local) {
+            this.gameState.health = Math.max(0, this.gameState.health - damage);
+            this.adaptiveDifficulty.recordDamage(damage, this.gameState.health);
+          } else {
+            this.multiplayer.sendPlayerDamage(target.id, damage);
+          }
         }
       }
 
@@ -615,8 +644,14 @@ class UIManager {
 }
 
 class InputManager {
-  constructor(private gameState: GameState, private weaponManager: WeaponManager, private lightingManager: LightingManager, private controls: PointerLockControls) {
-    // Keyboard and mouse are handled independently so movement and firing can happen together.
+  constructor(
+    private gameState: GameState,
+    private weaponManager: WeaponManager,
+    private lightingManager: LightingManager,
+    private controls: PointerLockControls
+  ) {
+    // Each key is tracked independently, so combinations such as
+    // W + D + Space and S + A + mouse fire work at the same time.
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('pointerdown', this.onPointerDown);
@@ -626,21 +661,27 @@ class InputManager {
     document.body.addEventListener('click', this.onClick);
   }
 
+  private refreshShootingState(): void {
+    this.gameState.isShooting = Boolean(
+      this.gameState.keysPressed['Space'] ||
+      this.gameState.keysPressed['KeyE'] ||
+      this.gameState.keysPressed['MouseLeft']
+    );
+  }
+
   private onKeyDown = (e: KeyboardEvent): void => {
     this.gameState.keysPressed[e.code] = true;
 
-    if (['KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(e.code)) {
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'KeyE'].includes(e.code)) {
       e.preventDefault();
     }
 
-    // Space can be held to fire while W/A/S/D remain pressed.
-    if (e.code === 'Space') {
-      e.preventDefault();
-      this.gameState.isShooting = true;
+    if (e.code === 'Space' || e.code === 'KeyE') {
+      this.refreshShootingState();
       return;
     }
 
-    if (e.code === 'KeyR' && this.weaponManager.canReload()) {
+    if (e.code === 'KeyR' && !e.repeat && this.weaponManager.canReload()) {
       this.weaponManager.playGunAction(7);
     } else if (e.code === 'KeyF' && !e.repeat) {
       this.gameState.flashlightOn = !this.gameState.flashlightOn;
@@ -650,29 +691,32 @@ class InputManager {
 
   private onKeyUp = (e: KeyboardEvent): void => {
     this.gameState.keysPressed[e.code] = false;
-    if (e.code === 'Space') {
+
+    if (e.code === 'Space' || e.code === 'KeyE') {
       e.preventDefault();
-      this.gameState.isShooting = false;
+      this.refreshShootingState();
     }
   }
 
   private onPointerDown = (e: PointerEvent): void => {
     if (e.button !== 0) return;
 
-    // First click locks the mouse. Following clicks shoot, including while W/A/S/D are held.
+    // First click only captures the mouse. After that, holding the left
+    // mouse button fires even while several movement keys are held.
     if (!this.controls.isLocked) {
       this.controls.lock();
       return;
     }
 
     e.preventDefault();
-    this.gameState.isShooting = true;
+    this.gameState.keysPressed['MouseLeft'] = true;
+    this.refreshShootingState();
   }
 
   private onPointerUp = (e: PointerEvent): void => {
-    if (e.button === 0) {
-      this.gameState.isShooting = false;
-    }
+    if (e.button !== 0) return;
+    this.gameState.keysPressed['MouseLeft'] = false;
+    this.refreshShootingState();
   }
 
   private onClick = (): void => {
@@ -681,7 +725,8 @@ class InputManager {
 
   private onPointerLockChange = (): void => {
     if (!this.controls.isLocked) {
-      this.gameState.isShooting = false;
+      this.gameState.keysPressed['MouseLeft'] = false;
+      this.refreshShootingState();
     }
   }
 
@@ -691,8 +736,8 @@ class InputManager {
   }
 
   public isWalking(): boolean {
-    const { keysPressed } = this.gameState;
-    return Boolean(keysPressed['KeyW'] || keysPressed['KeyA'] || keysPressed['KeyS'] || keysPressed['KeyD']);
+    const keys = this.gameState.keysPressed;
+    return Boolean(keys['KeyW'] || keys['KeyA'] || keys['KeyS'] || keys['KeyD']);
   }
 }
 
@@ -790,7 +835,9 @@ class Game {
       this.gameState,
       this.modelManager,
       this.sceneManager.camera,
-      this.adaptiveDifficulty
+      this.adaptiveDifficulty,
+      this.multiplayer,
+      this.remotePlayers
     );
     this.uiManager = new UIManager(this.gameState, this.adaptiveDifficulty);
     this.setupMultiplayerEvents();
@@ -809,6 +856,7 @@ class Game {
       }
       mesh.position.set(state.position.x, state.position.y - 1, state.position.z);
       mesh.rotation.y = state.rotationY;
+      mesh.userData.health = state.health;
     });
 
     this.multiplayer.onPlayerLeft((id) => {
@@ -818,6 +866,12 @@ class Game {
     });
 
     this.multiplayer.onRemoteShot((data) => this.showRemoteShot(data));
+
+    this.multiplayer.onPlayerDamage((amount) => {
+      if (this.gameState.health <= 0) return;
+      this.gameState.health = Math.max(0, this.gameState.health - amount);
+      this.adaptiveDifficulty.recordDamage(amount, this.gameState.health);
+    });
 
     this.multiplayer.onZombieHit((index) => {
       if (this.multiplayer.isHost) this.weaponManager.applyZombieDamage(index);
@@ -829,20 +883,57 @@ class Game {
   }
 
   private createRemotePlayer(): THREE.Object3D {
-    const group = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.35, 1.0, 4, 8),
-      new THREE.MeshStandardMaterial({ color: 0x3fa9f5 })
-    );
-    body.castShadow = true;
-    group.add(body);
-    const gun = new THREE.Mesh(
-      new THREE.BoxGeometry(0.12, 0.12, 0.8),
-      new THREE.MeshStandardMaterial({ color: 0x222222 })
-    );
-    gun.position.set(0.25, 0.2, -0.45);
-    group.add(gun);
-    return group;
+    // Lightweight procedural soldier so the teammate looks like a combat character
+    // without requiring an additional external model file.
+    const soldier = new THREE.Group();
+    const uniform = new THREE.MeshStandardMaterial({ color: 0x3f5f3b, roughness: 0.8 });
+    const vest = new THREE.MeshStandardMaterial({ color: 0x232a22, roughness: 0.9 });
+    const skin = new THREE.MeshStandardMaterial({ color: 0xc98f68, roughness: 0.8 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x151718, roughness: 0.7 });
+
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.9, 0.38), uniform);
+    torso.position.y = 1.25;
+    soldier.add(torso);
+
+    const chestVest = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.55, 0.44), vest);
+    chestVest.position.set(0, 1.3, -0.02);
+    soldier.add(chestVest);
+
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.25, 14, 10), skin);
+    head.position.y = 1.95;
+    soldier.add(head);
+
+    const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.28, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.58), dark);
+    helmet.position.y = 2.03;
+    soldier.add(helmet);
+
+    const makeLimb = (x: number, y: number, isLeg = false) => {
+      const limb = new THREE.Mesh(
+        new THREE.CapsuleGeometry(isLeg ? 0.11 : 0.09, isLeg ? 0.62 : 0.48, 4, 8),
+        isLeg ? dark : uniform
+      );
+      limb.position.set(x, y, 0);
+      soldier.add(limb);
+      return limb;
+    };
+    makeLimb(-0.47, 1.28);
+    makeLimb(0.47, 1.28);
+    makeLimb(-0.2, 0.48, true);
+    makeLimb(0.2, 0.48, true);
+
+    const rifle = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.95), dark);
+    rifle.position.set(0.28, 1.25, -0.52);
+    rifle.rotation.x = -0.12;
+    soldier.add(rifle);
+
+    soldier.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    soldier.userData.health = 100;
+    return soldier;
   }
 
   private showRemoteShot(data: any): void {
@@ -909,7 +1000,11 @@ class Game {
   }
 
   private setupControls(): void {
+    this.sceneManager.camera.rotation.order = 'YXZ';
     this.controls = new PointerLockControls(this.sceneManager.camera, this.sceneManager.renderer.domElement);
+    // Horizontal rotation is intentionally unlimited (full 360 degrees).
+    this.controls.minPolarAngle = 0.05;
+    this.controls.maxPolarAngle = Math.PI - 0.05;
     this.sceneManager.scene.add(this.controls.object);
   }
 
@@ -1466,6 +1561,7 @@ function showClickToPlay(onClick: () => void) {
     <div style="font-size:1.2rem;margin-top:1.5rem;text-align:center">
       Use <b>W A S D</b> to move<br/><br/>
       Hold <b>SPACE</b> or Left Click to shoot<br/><br/>
+      Hold <b>Space</b>, <b>E</b>, or left mouse to shoot<br/><br/>
       Press <b>R</b> to reload<br/><br/>
       Press <b>F</b> to toggle flashlight
     </div>

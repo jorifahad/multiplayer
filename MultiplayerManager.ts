@@ -29,6 +29,7 @@ export class MultiplayerManager {
   private remoteShotHandler?: (data: any) => void;
   private zombieHitHandler?: (index: number) => void;
   private zombieSnapshotHandler?: (snapshot: ZombieSnapshot) => void;
+  private playerDamageHandler?: (amount: number, attackerId?: string) => void;
 
   constructor(serverUrl?: string) {
     const configuredUrl = import.meta.env.VITE_SERVER_URL?.trim();
@@ -49,6 +50,9 @@ export class MultiplayerManager {
     this.socket.on('remote-shot', (data: any) => this.remoteShotHandler?.(data));
     this.socket.on('zombie-hit', ({ index }: { index: number }) => this.zombieHitHandler?.(index));
     this.socket.on('zombie-snapshot', (snapshot: ZombieSnapshot) => this.zombieSnapshotHandler?.(snapshot));
+    this.socket.on('player-damage', ({ amount, attackerId }: { amount: number; attackerId?: string }) => {
+      this.playerDamageHandler?.(Number(amount) || 0, attackerId);
+    });
   }
 
   public get playerId(): string { return this.socket.id || ''; }
@@ -61,6 +65,7 @@ export class MultiplayerManager {
   public onRemoteShot(handler: (data: any) => void): void { this.remoteShotHandler = handler; }
   public onZombieHit(handler: (index: number) => void): void { this.zombieHitHandler = handler; }
   public onZombieSnapshot(handler: (snapshot: ZombieSnapshot) => void): void { this.zombieSnapshotHandler = handler; }
+  public onPlayerDamage(handler: (amount: number, attackerId?: string) => void): void { this.playerDamageHandler = handler; }
 
   public async showLobby(): Promise<RoomReady> {
     await this.waitForConnection();
@@ -299,6 +304,11 @@ export class MultiplayerManager {
   public sendZombieHit(index: number): void {
     if (!this.roomCode) return;
     this.socket.emit('zombie-hit', { index });
+  }
+
+  public sendPlayerDamage(targetId: string, amount: number): void {
+    if (!this.roomCode || !targetId || amount <= 0) return;
+    this.socket.emit('player-damage', { targetId, amount });
   }
 
   public sendZombieSnapshot(snapshot: ZombieSnapshot): void {

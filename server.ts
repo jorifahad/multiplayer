@@ -90,6 +90,13 @@ io.on('connection', (socket) => {
     if (roomCode) socket.to(roomCode).emit('remote-shot', { ...data, id: socket.id });
   });
 
+  socket.on('player-damage', ({ targetId, amount }) => {
+    const roomCode = socket.data.roomCode;
+    const room = rooms.get(roomCode);
+    if (!room || !room.players.has(targetId)) return;
+    io.to(targetId).emit('player-damage', { amount: Math.max(0, Number(amount) || 0), attackerId: socket.id });
+  });
+
   socket.on('zombie-hit', ({ index }) => {
     const roomCode = socket.data.roomCode;
     const room = rooms.get(roomCode);
