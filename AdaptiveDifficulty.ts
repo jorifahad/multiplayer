@@ -6,6 +6,14 @@ export interface EnemyDifficultySettings {
   separationMultiplier: number;
 }
 
+export type PerformanceSnapshot = {
+  difficulty: number;
+  shotsFired: number;
+  shotsHit: number;
+  kills: number;
+  health: number;
+};
+
 export class AdaptiveDifficulty {
   private shotsFired = 0;
   private shotsHit = 0;
@@ -14,7 +22,8 @@ export class AdaptiveDifficulty {
   private playerHealth = 100;
 
   private startTime = performance.now();
-  private difficulty = 0.5;
+  private localDifficulty = 0.5;
+  private sharedDifficulty = 0.5;
   private lastUpdateTime = performance.now();
 
   public recordShot(): void {
@@ -30,7 +39,7 @@ export class AdaptiveDifficulty {
   }
 
   public recordDamage(amount: number, currentHealth: number): void {
-    this.damageTaken += amount;
+    this.damageTaken += Math.max(0, amount);
     this.playerHealth = Math.max(0, currentHealth);
   }
 
@@ -40,10 +49,9 @@ export class AdaptiveDifficulty {
       0.25
     );
 
-    const accuracy =
-      this.shotsFired > 0
-        ? this.shotsHit / this.shotsFired
-        : 0.45;
+    const accuracy = this.shotsFired > 0
+      ? this.shotsHit / this.shotsFired
+      : 0.45;
 
     const killsPerMinute = this.kills / elapsedMinutes;
     const killScore = Math.min(killsPerMinute / 6, 1);
@@ -57,22 +65,41 @@ export class AdaptiveDifficulty {
     return Math.max(0.2, Math.min(1, performanceScore));
   }
 
-  private updateDifficulty(): void {
+  private updateLocalDifficulty(): void {
     const now = performance.now();
-
-    // Recalculate at most four times per second.
     if (now - this.lastUpdateTime < 250) return;
     this.lastUpdateTime = now;
 
     const target = this.calculateTargetDifficulty();
+    this.localDifficulty += (target - this.localDifficulty) * 0.08;
+  }
 
-    // Smooth transition so enemies never change suddenly.
-    this.difficulty += (target - this.difficulty) * 0.08;
+  public getLocalDifficultyLevel(): number {
+    this.updateLocalDifficulty();
+    return this.localDifficulty;
+  }
+
+  public setSharedDifficultyLevel(level: number): void {
+    if (!Number.isFinite(level)) return;
+    this.sharedDifficulty = Math.max(0.2, Math.min(1, level));
+  }
+
+  public getPerformanceSnapshot(): PerformanceSnapshot {
+    return {
+      difficulty: this.getLocalDifficultyLevel(),
+      shotsFired: this.shotsFired,
+      shotsHit: this.shotsHit,
+      kills: this.kills,
+      health: this.playerHealth
+    };
   }
 
   public getEnemySettings(): EnemyDifficultySettings {
-    this.updateDifficulty();
-    const level = this.difficulty;
+    this.updateLocalDifficulty();
+
+    // Both players use the same difficulty. The server chooses the stronger
+    // player's value and broadcasts it to the whole room.
+    const level = Math.max(this.localDifficulty, this.sharedDifficulty);
 
     return {
       movementSpeedMultiplier: 0.70 + level * 0.80,
@@ -84,7 +111,7 @@ export class AdaptiveDifficulty {
   }
 
   public getDifficultyLevel(): number {
-    this.updateDifficulty();
-    return this.difficulty;
+    this.updateLocalDifficulty();
+    return Math.max(this.localDifficulty, this.sharedDifficulty);
   }
 }

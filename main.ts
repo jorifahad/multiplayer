@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { AdaptiveDifficulty } from "./AdaptiveDifficulty";
-import { MultiplayerManager, ZombieSnapshot } from "./MultiplayerManager";
+import { MultiplayerManager, ZombieSnapshot, MissionStage } from "./MultiplayerManager";
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -15,7 +15,7 @@ const CONFIG = {
   RENDERER: { PIXEL_RATIO_MAX: 1.5 },
   MOVEMENT: { SPEED: 10 },
   WEAPON: { MAX_AMMO: 40, SHOOT_COOLDOWN: 0.15, RELOAD_TIME: 3.5, MUZZLE_FLASH_DURATION: 50 },
-  ZOMBIE: { SPEED: 5, DAMAGE_RATE: 10, MIN_DISTANCE: 0.5, COUNT: 50 },
+  ZOMBIE: { SPEED: 5, DAMAGE_RATE: 20, MIN_DISTANCE: 1.5, COUNT: 50 },
   RAIN: { COUNT: 500, FALL_SPEED_MIN: 0.3, FALL_SPEED_MAX: 0.8, SPAWN_RANGE: 25, HEIGHT_MIN: 60, HEIGHT_MAX: 100 },
   BULLET: { SPEED: 10, MAX_DISTANCE: 1000 },
   PLAYER: { INITIAL_HEALTH: 100 }
@@ -512,8 +512,8 @@ class EnemyManager {
           zombie.position.add(this.moveVec);
           zombie.lookAt(target.position.x, zombie.position.y, target.position.z);
         } else if (remainingCooldown <= 0) {
-          const damage = damageRate * 0.5;
-          this.attackCooldowns.set(i, 0.5);
+          const damage = damageRate;
+          this.attackCooldowns.set(i, 0.8);
           if (target.local) {
             this.gameState.health = Math.max(0, this.gameState.health - damage);
             this.adaptiveDifficulty.recordDamage(damage, this.gameState.health);
@@ -777,6 +777,10 @@ class Game {
   private bobbingSpeed = 12;
   private bobbingOffset = 0;
 
+  private missionStage: MissionStage = 1;
+  private appliedMissionStage: MissionStage = 1;
+  private lastDifficultyReport = 0;
+
   private sceneManager: SceneManager;
   private gameState: GameState;
   private adaptiveDifficulty: AdaptiveDifficulty;
@@ -864,6 +868,15 @@ class Game {
 
     this.multiplayer.onZombieSnapshot((snapshot) => {
       if (!this.multiplayer.isHost) this.applyZombieSnapshot(snapshot);
+    });
+
+    this.multiplayer.onSharedDifficulty((level) => {
+      this.adaptiveDifficulty.setSharedDifficultyLevel(level);
+    });
+
+    this.multiplayer.onMissionStage((stage) => {
+      this.missionStage = stage;
+      this.applyMissionStage(stage);
     });
   }
 
@@ -974,6 +987,7 @@ class Game {
       this.checkpointMixer = new THREE.AnimationMixer(this.checkpoint);
       this.checkpointMixer.clipAction(gltf.animations[0]).play();
       this.checkpointBox = new THREE.Box3().setFromObject(this.checkpoint);
+      this.applyMissionStage(this.missionStage);
     });
   }
 
@@ -1124,16 +1138,24 @@ class Game {
     }
 
     this.multiplayer.sendPlayerState(this.sceneManager.camera, this.gameState.health);
+
+    const now = performance.now();
+    if (now - this.lastDifficultyReport >= 750) {
+      this.lastDifficultyReport = now;
+      this.multiplayer.sendDifficultyReport(this.adaptiveDifficulty.getLocalDifficultyLevel());
+    }
+
     this.lightingManager.updateFlashlight();
     this.uiManager.updateUI(this.modelManager);
 
     if (playerAlive) {
       this.checkCheckpoint();
-      this.checkSecondCheckpoint();
-      this.checkThirdCheckpoint();
     }
+    // Wave completion must continue even if the host has died. The surviving
+    // teammate can still activate checkpoints and finish the mission.
+    this.updateSharedMissionProgress();
 
-    if (this.checkpoint2Triggered) {
+    if (this.missionStage >= 3) {
       this.updateNearbyStreetLights();
     }
 
@@ -1157,74 +1179,87 @@ class Game {
     }
   }
 
-  private checkSecondCheckpoint(): void {
-    const { modelManager } = this;
-    if (!this.checkpoint2Active && modelManager && modelManager.zombieStates) {
-      const killed = modelManager.zombieStates.filter(z => z.dead).length;
-      if (killed >= modelManager.zombieStates.length) {
-        document.getElementById("start-screen")?.style.setProperty("display", "none");
-        document.getElementById("loading-screen")?.style.setProperty("display", "none");
-        if (this.checkpoint) {
-          this.checkpoint.position.set(0, 0.7, -400);
-          this.checkpoint.scale.set(10, 10, 10);
-          this.checkpoint.visible = true;
-          this.checkpointBox = new THREE.Box3().setFromObject(this.checkpoint);
-          this.checkpoint2Active = true;
-          this.checkpoint2Triggered = false;
-        }
-      }
+  private updateSharedMissionProgress(): void {
+    const allDead = this.modelManager.zombieStates.length > 0 &&
+      this.modelManager.zombieStates.every((state) => state.dead);
+
+    // Only the host decides when a shared wave has been cleared.
+    if (this.multiplayer.isHost && this.missionStage === 1 && allDead) {
+      this.multiplayer.requestMissionStage(2);
+      return;
     }
 
-    if (this.checkpoint2Active && this.checkpoint && this.checkpointBox && !this.checkpoint2Triggered) {
-      this.checkpointBox.setFromObject(this.checkpoint);
-      const playerPos = this.sceneManager.camera.position;
-      const { min, max } = this.checkpointBox;
+    if (this.missionStage === 2 && this.isPlayerInsideCheckpoint()) {
+      // Either living player may activate the power checkpoint. The server
+      // accepts the first request and broadcasts stage 3 to both players.
+      this.multiplayer.requestMissionStage(3);
+      return;
+    }
 
-      if (playerPos.x >= min.x && playerPos.x <= max.x && playerPos.z >= min.z && playerPos.z <= max.z) {
-        this.checkpoint2Triggered = true;
-        if (this.checkpoint) this.checkpoint.visible = false;
-        this.afterSecondCheckpoint();
-      }
+    if (this.multiplayer.isHost && this.missionStage === 3 && allDead) {
+      this.multiplayer.requestMissionStage(4);
+      return;
+    }
+
+    if (this.missionStage === 4 && this.isPlayerInsideCheckpoint()) {
+      this.multiplayer.requestMissionStage(5);
     }
   }
 
-  private checkThirdCheckpoint(): void {
-    const { modelManager } = this;
-    if (!this.checkpoint3Active && this.checkpoint2Triggered && modelManager && modelManager.zombieStates) {
-      const killed = modelManager.zombieStates.filter(z => z.dead).length;
-      if (killed >= modelManager.zombieStates.length) {
-        const pos = CONFIG.CAMERA.INITIAL_POSITION;
-        if (this.checkpoint) {
-          this.checkpoint.position.set(pos.x, 0.7, pos.z);
-          this.checkpoint.scale.set(10, 10, 10);
-          this.checkpoint.visible = true;
-          this.checkpointBox = new THREE.Box3().setFromObject(this.checkpoint);
-          this.checkpoint3Active = true;
-          this.checkpoint3Triggered = false;
-        }
-      }
-    }
-
-    if (this.checkpoint3Active && this.checkpoint && this.checkpointBox && !this.checkpoint3Triggered) {
-      this.checkpointBox.setFromObject(this.checkpoint);
-      const playerPos = this.sceneManager.camera.position;
-      const { min, max } = this.checkpointBox;
-
-      if (playerPos.x >= min.x && playerPos.x <= max.x && playerPos.z >= min.z && playerPos.z <= max.z) {
-        this.checkpoint3Triggered = true;
-        if (this.checkpoint) this.checkpoint.visible = false;
-        showMissionCompleteOverlay();
-      }
-    }
+  private isPlayerInsideCheckpoint(): boolean {
+    if (!this.checkpoint || !this.checkpointBox || !this.checkpoint.visible) return false;
+    this.checkpointBox.setFromObject(this.checkpoint);
+    const playerPos = this.sceneManager.camera.position;
+    const { min, max } = this.checkpointBox;
+    return playerPos.x >= min.x && playerPos.x <= max.x &&
+      playerPos.z >= min.z && playerPos.z <= max.z;
   }
 
-  private afterSecondCheckpoint(): void {
-    this.gameState.flashlightOn = false;
-    this.lightingManager.flashlight.visible = false;
-    this.updateNearbyStreetLights();
-    this.respawnZombies();
-    this.uiManager.showZombieBar();
-    playSpeechAudio2();
+  private applyMissionStage(stage: MissionStage): void {
+    if (stage < this.appliedMissionStage) return;
+    this.appliedMissionStage = stage;
+
+    if (stage === 1) return;
+
+    if (stage === 2) {
+      if (this.checkpoint) {
+        this.checkpoint.position.set(0, 0.7, -400);
+        this.checkpoint.scale.set(10, 10, 10);
+        this.checkpoint.visible = true;
+        this.checkpointBox = new THREE.Box3().setFromObject(this.checkpoint);
+      }
+      this.uiManager.showZombieBar();
+      return;
+    }
+
+    if (stage === 3) {
+      if (this.checkpoint) this.checkpoint.visible = false;
+      this.checkpointBox = null;
+      this.gameState.flashlightOn = false;
+      this.lightingManager.flashlight.visible = false;
+      this.updateNearbyStreetLights();
+      this.respawnZombies();
+      this.uiManager.showZombieBar();
+      playSpeechAudio2();
+      return;
+    }
+
+    if (stage === 4) {
+      const pos = CONFIG.CAMERA.INITIAL_POSITION;
+      if (this.checkpoint) {
+        this.checkpoint.position.set(pos.x, 0.7, pos.z);
+        this.checkpoint.scale.set(10, 10, 10);
+        this.checkpoint.visible = true;
+        this.checkpointBox = new THREE.Box3().setFromObject(this.checkpoint);
+      }
+      return;
+    }
+
+    if (stage === 5) {
+      if (this.checkpoint) this.checkpoint.visible = false;
+      this.checkpointBox = null;
+      showMissionCompleteOverlay();
+    }
   }
 
   private respawnZombies(): void {

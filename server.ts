@@ -15,7 +15,16 @@ const io = new Server(httpServer, {
   cors: { origin: CLIENT_ORIGIN === '*' ? true : CLIENT_ORIGIN, methods: ['GET', 'POST'] }
 });
 
-type RoomInfo = { hostId: string; seed: number; players: Set<string>; started: boolean };
+type MissionStage = 1 | 2 | 3 | 4 | 5;
+type RoomInfo = {
+  hostId: string;
+  seed: number;
+  players: Set<string>;
+  started: boolean;
+  missionStage: MissionStage;
+  difficultyByPlayer: Map<string, number>;
+};
+
 const rooms = new Map<string, RoomInfo>();
 
 function makeCode(): string {
@@ -27,11 +36,24 @@ function makeCode(): string {
   return code;
 }
 
+function emitSharedDifficulty(roomCode: string, room: RoomInfo): void {
+  const values = [...room.difficultyByPlayer.values()];
+  const level = values.length ? Math.max(...values) : 0.5;
+  io.to(roomCode).emit('shared-difficulty', { level });
+}
+
 io.on('connection', (socket) => {
   socket.on('create-room', () => {
     const roomCode = makeCode();
     const seed = Math.floor(Math.random() * 2_000_000_000);
-    rooms.set(roomCode, { hostId: socket.id, seed, players: new Set([socket.id]), started: false });
+    rooms.set(roomCode, {
+      hostId: socket.id,
+      seed,
+      players: new Set([socket.id]),
+      started: false,
+      missionStage: 1,
+      difficultyByPlayer: new Map([[socket.id, 0.5]])
+    });
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
     socket.emit('room-created', { roomCode, seed, hostId: socket.id, playerId: socket.id });
@@ -42,7 +64,9 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomCode);
     if (!room) return socket.emit('room-error', 'الغرفة غير موجودة');
     if (room.players.size >= 2) return socket.emit('room-error', 'الغرفة ممتلئة');
+
     room.players.add(socket.id);
+    room.difficultyByPlayer.set(socket.id, 0.5);
     socket.join(roomCode);
     socket.data.roomCode = roomCode;
     socket.emit('room-joined', { roomCode, seed: room.seed, hostId: room.hostId, playerId: socket.id });
@@ -66,10 +90,9 @@ io.on('connection', (socket) => {
     }
 
     room.started = true;
+    room.missionStage = 1;
     ack?.({ ok: true });
 
-    // Send a separate start payload to every socket so both players always
-    // receive their own player id and leave the waiting room together.
     for (const playerId of room.players) {
       io.to(playerId).emit('room-started', {
         roomCode,
@@ -78,6 +101,9 @@ io.on('connection', (socket) => {
         playerId
       });
     }
+
+    io.to(roomCode).emit('mission-stage', { stage: room.missionStage });
+    emitSharedDifficulty(roomCode, room);
   });
 
   socket.on('player-state', (state) => {
@@ -94,7 +120,10 @@ io.on('connection', (socket) => {
     const roomCode = socket.data.roomCode;
     const room = rooms.get(roomCode);
     if (!room || !room.players.has(targetId)) return;
-    io.to(targetId).emit('player-damage', { amount: Math.max(0, Number(amount) || 0), attackerId: socket.id });
+    io.to(targetId).emit('player-damage', {
+      amount: Math.max(0, Number(amount) || 0),
+      attackerId: socket.id
+    });
   });
 
   socket.on('zombie-hit', ({ index }) => {
@@ -111,18 +140,53 @@ io.on('connection', (socket) => {
     socket.to(roomCode).emit('zombie-snapshot', snapshot);
   });
 
+  socket.on('difficulty-report', ({ level }) => {
+    const roomCode = socket.data.roomCode;
+    const room = rooms.get(roomCode);
+    if (!room || !room.players.has(socket.id)) return;
+    const safeLevel = Math.max(0.2, Math.min(1, Number(level) || 0.5));
+    room.difficultyByPlayer.set(socket.id, safeLevel);
+    emitSharedDifficulty(roomCode, room);
+  });
+
+  socket.on('mission-stage-request', ({ stage }) => {
+    const roomCode = socket.data.roomCode;
+    const room = rooms.get(roomCode);
+    if (!room || !room.started) return;
+
+    const requested = Number(stage) as MissionStage;
+    if (![2, 3, 4, 5].includes(requested)) return;
+
+    // Stage 2 and 4 come from the host after a shared zombie wave is cleared.
+    if ((requested === 2 || requested === 4) && socket.id !== room.hostId) return;
+
+    // Enforce strict order so nobody can skip the second wave or finish early.
+    if (requested !== room.missionStage + 1) return;
+
+    room.missionStage = requested;
+    io.to(roomCode).emit('mission-stage', { stage: room.missionStage });
+  });
+
   socket.on('disconnect', () => {
     const roomCode = socket.data.roomCode;
     if (!roomCode) return;
     const room = rooms.get(roomCode);
     if (!room) return;
+
     room.players.delete(socket.id);
+    room.difficultyByPlayer.delete(socket.id);
     socket.to(roomCode).emit('player-left', socket.id);
+
     if (room.players.size === 0 || socket.id === room.hostId) {
       io.to(roomCode).emit('room-error', 'صاحب الغرفة خرج');
       rooms.delete(roomCode);
+      return;
     }
+
+    emitSharedDifficulty(roomCode, room);
   });
 });
 
-httpServer.listen(PORT, () => console.log(`Multiplayer server running on port ${PORT}`));
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Multiplayer server running on port ${PORT}`);
+});

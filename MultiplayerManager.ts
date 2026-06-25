@@ -14,6 +14,8 @@ export type ZombieSnapshot = {
   states: Array<{ health: number; dead: boolean; dying: boolean }>;
 };
 
+export type MissionStage = 1 | 2 | 3 | 4 | 5;
+
 type RoomReady = { roomCode: string; seed: number; hostId: string; playerId: string };
 
 export class MultiplayerManager {
@@ -30,6 +32,8 @@ export class MultiplayerManager {
   private zombieHitHandler?: (index: number) => void;
   private zombieSnapshotHandler?: (snapshot: ZombieSnapshot) => void;
   private playerDamageHandler?: (amount: number, attackerId?: string) => void;
+  private missionStageHandler?: (stage: MissionStage) => void;
+  private sharedDifficultyHandler?: (level: number) => void;
 
   constructor(serverUrl?: string) {
     const configuredUrl = import.meta.env.VITE_SERVER_URL?.trim();
@@ -53,6 +57,12 @@ export class MultiplayerManager {
     this.socket.on('player-damage', ({ amount, attackerId }: { amount: number; attackerId?: string }) => {
       this.playerDamageHandler?.(Number(amount) || 0, attackerId);
     });
+    this.socket.on('mission-stage', ({ stage }: { stage: MissionStage }) => {
+      this.missionStageHandler?.(stage);
+    });
+    this.socket.on('shared-difficulty', ({ level }: { level: number }) => {
+      this.sharedDifficultyHandler?.(Math.max(0.2, Math.min(1, Number(level) || 0.5)));
+    });
   }
 
   public get playerId(): string { return this.socket.id || ''; }
@@ -66,6 +76,8 @@ export class MultiplayerManager {
   public onZombieHit(handler: (index: number) => void): void { this.zombieHitHandler = handler; }
   public onZombieSnapshot(handler: (snapshot: ZombieSnapshot) => void): void { this.zombieSnapshotHandler = handler; }
   public onPlayerDamage(handler: (amount: number, attackerId?: string) => void): void { this.playerDamageHandler = handler; }
+  public onMissionStage(handler: (stage: MissionStage) => void): void { this.missionStageHandler = handler; }
+  public onSharedDifficulty(handler: (level: number) => void): void { this.sharedDifficultyHandler = handler; }
 
   public async showLobby(): Promise<RoomReady> {
     await this.waitForConnection();
@@ -309,6 +321,17 @@ export class MultiplayerManager {
   public sendPlayerDamage(targetId: string, amount: number): void {
     if (!this.roomCode || !targetId || amount <= 0) return;
     this.socket.emit('player-damage', { targetId, amount });
+  }
+
+
+  public requestMissionStage(stage: MissionStage): void {
+    if (!this.roomCode) return;
+    this.socket.emit('mission-stage-request', { stage });
+  }
+
+  public sendDifficultyReport(level: number): void {
+    if (!this.roomCode || !Number.isFinite(level)) return;
+    this.socket.emit('difficulty-report', { level: Math.max(0.2, Math.min(1, level)) });
   }
 
   public sendZombieSnapshot(snapshot: ZombieSnapshot): void {
