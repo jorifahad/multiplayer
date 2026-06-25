@@ -1651,8 +1651,57 @@ function showMissionCompleteOverlay() {
   document.exitPointerLock?.();
 }
 
+
+function removeLegacyLandingContent(): void {
+  const legacyHeadings = [
+    'About Zombie Strike',
+    'Why Play Zombie Strike?',
+    'How to Play',
+    'The Story',
+    'Credits',
+    '3D Assets:'
+  ];
+
+  // Remove the old GitHub star promotion.
+  document.querySelectorAll<HTMLAnchorElement>('a').forEach((link) => {
+    const label = (link.textContent || '').trim().toLowerCase();
+    if (label.includes('star this project on github')) {
+      link.remove();
+    }
+  });
+
+  // Remove every legacy information/credits section while keeping the game UI.
+  document.querySelectorAll<HTMLElement>('h1, h2, h3, h4, strong, p, div').forEach((element) => {
+    const label = (element.textContent || '').trim();
+    if (!legacyHeadings.some((heading) => label === heading || label.startsWith(heading))) return;
+
+    const block = element.closest<HTMLElement>('section, article, footer, .about, .credits, .info-section');
+    if (block && !block.closest('#start-screen, #loading-screen, #container')) {
+      block.remove();
+      return;
+    }
+
+    // Fallback for pages where the old content is wrapped in a plain div.
+    const parent = element.parentElement;
+    if (parent && !parent.closest('#start-screen, #loading-screen, #container')) {
+      parent.remove();
+    }
+  });
+
+  // Remove any remaining standalone original-author credit lines.
+  const creditNames = ['Rohan Vashisht', 'Alok Nair', 'Karl Casey', 'Pixabay'];
+  document.querySelectorAll<HTMLElement>('p, li, div').forEach((element) => {
+    const label = (element.textContent || '').trim();
+    if (creditNames.some((name) => label.includes(name)) &&
+        !element.closest('#start-screen, #loading-screen, #container')) {
+      element.remove();
+    }
+  });
+}
+
 // Main function
 function main() {
+  removeLegacyLandingContent();
   setupRainAudio();
   setupBgAudio();
 
