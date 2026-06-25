@@ -3,12 +3,8 @@
 
 <head>
   <meta charset="utf-8" />
-  <title>Zombie Strike: The Ultimate Zombie Survival Game</title>
-  <meta name="description"
-    content="Zombie Strike is an action-packed survival game where you fight off hordes of zombies. Play now and test your skills in this thrilling zombie apocalypse adventure!">
-  <meta name="keywords"
-    content="zombie, zombie games, survival games, action games, shooter games, apocalypse, undead, horror games">
-  <style>
+  <title>Zombie Strike</title>
+<style>
     :root,
     html,
     body {
@@ -70,8 +66,6 @@
       gap: 2rem;
       max-width: 800px;
       width: 100%;
-      max-height: 90vh;
-      overflow-y: auto;
       padding: 2rem;
       border-radius: 16px;
       box-shadow: 0 0 20px #00f0ff55;
@@ -100,68 +94,7 @@
       transform: scale(1.05);
       background: #00cce0;
     }
-
-    #github-star {
-      display: inline-flex;
-      align-items: center;
-      padding: 0.75rem 2rem;
-      font-size: 1.2rem;
-      color: #fff;
-      background: linear-gradient(90deg, #24292f 60%, #00f0ff 100%);
-      border: none;
-      border-radius: 10px;
-      text-decoration: none;
-      box-shadow: 0 0 20px #00f0ff, 0 0 40px #00f0ff33;
-      cursor: pointer;
-      font-weight: bold;
-      transition: background 0.3s, transform 0.2s;
-    }
-
-    #github-star:hover {
-      background: linear-gradient(90deg, #00cce0 60%, #24292f 100%);
-      transform: scale(1.05);
-    }
-
-    #credits {
-      color: #b6faff;
-      background: rgba(0, 0, 0, 0.25);
-      border-radius: 12px;
-      padding: 1.5rem 2rem;
-      font-size: 1.1rem;
-      box-shadow: 0 0 10px #00f0ff44;
-      text-align: left;
-      width: 100%;
-      max-width: 700px;
-    }
-
-    #credits ul {
-      list-style: none;
-      padding: 0;
-      margin: 0 0 1rem 0;
-    }
-
-    #credits li {
-      margin-bottom: 1rem;
-      line-height: 1.5;
-    }
-
-    #credits strong {
-      color: #00f0ff;
-    }
-
-    #about {
-      color: #b6faff;
-      background: rgba(0, 0, 0, 0.25);
-      border-radius: 12px;
-      padding: 1.5rem 2rem;
-      font-size: 1.1rem;
-      box-shadow: 0 0 10px #00f0ff44;
-      text-align: left;
-      width: 100%;
-      max-width: 700px;
-    }
-
-    #loading-screen {
+#loading-screen {
       display: none;
       position: fixed;
       inset: 0;
@@ -297,73 +230,6 @@
       <h1 id="title">⚡ ZOMBIE STRIKE ⚡</h1>
       <button id="start-button" aria-label="Start the game">Start Game</button>
       <div id="notification">Press ESC to exit fullscreen</div>
-      <a id="github-star" href="https://github.com/rohanvashisht1234/threejs-zombieshooter-game" target="_blank"
-        aria-label="Star this project on GitHub">⭐ Star this project on GitHub</a>
-      <div id="about">
-        <h2>About Zombie Strike</h2>
-        <p>Zombie Strike is one of the most exciting zombie games available online. In this action-packed survival game,
-          you'll face relentless hordes of zombies in a post-apocalyptic world. Your mission is to survive as long as
-          possible by using a variety of weapons and strategic tactics.</p>
-        <h3>Why Play Zombie Strike?</h3>
-        <ul>
-          <li>Experience intense zombie combat like never before</li>
-          <li>Choose from multiple weapons to defeat the undead</li>
-          <li>Complete challenging missions to test your skills</li>
-          <li>Enjoy stunning 3D graphics that bring the apocalypse to life</li>
-          <li>Immerse yourself in the game with high-quality sound effects and music</li>
-        </ul>
-        <h3>How to Play</h3>
-        <p>Controls are simple: use WASD to move, mouse to aim and shoot, R to reload, and F to toggle flash light.
-          Your goal is to survive the zombie onslaught and complete your missions. Are you ready to join the fight
-          against the undead?</p>
-        <h3>The Story</h3>
-        <p>In the year 2025, a mysterious virus outbreak turned most of humanity into flesh-eating zombies. You are one
-          of the few survivors, holed up in an abandoned military base. With limited supplies and ammunition, you must
-          venture out to scavenge for resources and find a way to stop the zombie apocalypse.</p>
-      </div>
-      <div id="credits">
-        <ul>
-          <li><strong>Rohan Vashisht</strong> — Programmer, map designer, game designer, voice actor, and the one who
-            brought everything to life.</li>
-          <li><strong>Alok Nair</strong> — Music & sound manager, asset researcher, gameplay tester, and gave invaluable
-            feedback on various fixes.</li>
-        </ul>
-        <div style="margin-top:1.5rem;">
-          <strong>🔊 Credits</strong>
-          <ul>
-            <li>🎵 <strong>Music:</strong> Karl Casey @ White Bat Audio - YouTube</li>
-            <li>🎧 <strong>Sound Effects:</strong> Pixabay - pixabay.com</li>
-            <li><strong>3D Assets:</strong>
-              <ul>
-                <li><a href="https://sketchfab.com/3d-models/zombie-hazmat-49b3b4307f6a4d2386fdb02354158d04#download"
-                    target="_blank">Zombie Hazmat</a></li>
-                <li><a href="https://sketchfab.com/3d-models/fps-ak-74m-animations-94be8385c402474cacd39bc096c6ca14"
-                    target="_blank">FPS AK-74M + Animations</a></li>
-                <li><a href="https://sketchfab.com/3d-models/fence-0adbc93269c94b70b99d0627a3ee54f5"
-                    target="_blank">Fence</a></li>
-                <li><a href="https://sketchfab.com/3d-models/wall-door-19mb-cac51dfd82784736a726bba118e86de9"
-                    target="_blank">Wall + Door</a></li>
-                <li><a href="https://sketchfab.com/3d-models/sand-bags-e02685e0047948aabc75227cb1962d05#download"
-                    target="_blank">Sandbags</a></li>
-                <li><a
-                    href="https://sketchfab.com/3d-models/prototipo-speciale-police-95-low-poly-model-63aa215521334cef9c4d8c4c391252ad"
-                    target="_blank">Police Car (Low Poly)</a></li>
-                <li><a
-                    href="https://sketchfab.com/3d-models/crashed-abandoned-car-game-ready-66ef51a84c9843dda53bf0b4b9020011#download"
-                    target="_blank">Crashed Abandoned Car</a></li>
-                <li><a href="https://sketchfab.com/3d-models/electric-box-c7bba1e774d94e67b410e4c9fdfdee34#download"
-                    target="_blank">Electric Box</a></li>
-                <li><a
-                    href="https://sketchfab.com/3d-models/wwii-air-trafic-control-tower-9e7f035ed7f4449593ad1bebe6ac71b1"
-                    target="_blank">WWII Air Traffic Control Tower</a></li>
-                <li><a
-                    href="https://sketchfab.com/3d-models/psx-style-brick-wall-80e53aac4eaa4aa99750f2429a4fe9f2#download"
-                    target="_blank">PSX Style Brick Wall</a></li>
-              </ul>
-            </li>
-          </ul>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -380,16 +246,12 @@
   <div id="mission-complete-overlay" class="mission-overlay">
     <div class="mission-content">
       <div>Mission Complete!</div>
-      <a href="https://github.com/RohanVashisht1234/threejs-zombieshooter-game" target="_blank" class="mission-link">⭐
-        Star this Project on GitHub</a>
     </div>
   </div>
 
   <div id="mission-failed-overlay" class="mission-overlay">
     <div class="mission-content">
       <div>Mission Failed!</div>
-      <a href="https://github.com/RohanVashisht1234/threejs-zombieshooter-game" target="_blank" class="mission-link">⭐
-        Star this Project on GitHub</a>
     </div>
   </div>
 
