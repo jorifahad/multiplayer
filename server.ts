@@ -90,6 +90,22 @@ io.on('connection', (socket) => {
     socket.data.roomCode = roomCode;
     socket.emit('room-joined', { roomCode, seed: room.seed, hostId: room.hostId, playerId: socket.id });
     socket.to(roomCode).emit('player-joined', socket.id);
+
+    // Start immediately as soon as the second player joins.
+    room.started = true;
+    room.missionStage = 1;
+
+    for (const playerId of room.players) {
+      io.to(playerId).emit('room-started', {
+        roomCode,
+        seed: room.seed,
+        hostId: room.hostId,
+        playerId
+      });
+    }
+
+    io.to(roomCode).emit('mission-stage', { stage: room.missionStage });
+    emitSharedDifficulty(roomCode, room);
   });
 
   socket.on('start-room', (ack?: (response: { ok: boolean; message?: string }) => void) => {

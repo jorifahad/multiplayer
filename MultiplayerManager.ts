@@ -116,7 +116,7 @@ export class MultiplayerManager {
             <div style="font-size:14px;color:#aab6c8;margin-bottom:8px">ROOM CODE</div>
             <div id="host-room-code" style="font-size:38px;font-weight:800;letter-spacing:8px;color:#8ee7ff;margin:8px 0 16px"></div>
             <button id="copy-room-code" style="width:100%;padding:12px;margin-bottom:10px;cursor:pointer">Copy Code</button>
-            <button id="start-room" disabled style="width:100%;padding:13px;font-size:17px;cursor:not-allowed;opacity:.5">Waiting for teammate...</button>
+            <div style="padding:13px;font-size:17px;color:#aab6c8">Waiting for teammate...</div>
           </div>
 
           <div id="room-status" style="margin-top:18px;min-height:24px;color:#8ee7ff"></div>
@@ -127,13 +127,11 @@ export class MultiplayerManager {
       const hostPanel = overlay.querySelector('#host-room-panel') as HTMLDivElement;
       const hostCode = overlay.querySelector('#host-room-code') as HTMLDivElement;
       const copyButton = overlay.querySelector('#copy-room-code') as HTMLButtonElement;
-      const startButton = overlay.querySelector('#start-room') as HTMLButtonElement;
       const status = overlay.querySelector('#room-status') as HTMLDivElement;
       const input = overlay.querySelector('#room-code-input') as HTMLInputElement;
 
       let pendingRoom: RoomReady | null = null;
       let isHost = false;
-      let teammateJoined = false;
 
       const cleanup = () => {
         this.socket.off('room-created', onRoomCreated);
@@ -168,7 +166,7 @@ export class MultiplayerManager {
         actions.style.display = 'none';
         hostPanel.style.display = 'block';
         hostCode.textContent = data.roomCode;
-        status.textContent = 'Copy the code and send it to your teammate. The game will not start until the second player joins.';
+        status.textContent = 'Copy the code and send it to your teammate. The game starts automatically when they join.';
       };
 
       const onRoomJoined = (data: RoomReady) => {
@@ -179,17 +177,12 @@ export class MultiplayerManager {
         this.hostId = data.hostId;
 
         actions.style.display = 'none';
-        status.textContent = `Joined room ${data.roomCode}. Waiting for the host to start the game...`;
+        status.textContent = `Joined room ${data.roomCode}. Starting automatically...`;
       };
 
       const onPlayerJoined = () => {
         if (!isHost) return;
-        teammateJoined = true;
-        startButton.disabled = false;
-        startButton.style.cursor = 'pointer';
-        startButton.style.opacity = '1';
-        startButton.textContent = 'Start Game';
-        status.textContent = 'Your teammate joined. Press Start Game when you are both ready.';
+        status.textContent = 'Your teammate joined. Starting automatically...';
       };
 
       const onRoomStarted = (data?: Partial<RoomReady>) => {
@@ -245,27 +238,7 @@ export class MultiplayerManager {
         window.setTimeout(() => { copyButton.textContent = 'Copy Code'; }, 1500);
       };
 
-      startButton.onclick = () => {
-        if (!isHost || !teammateJoined || !pendingRoom) return;
-        startButton.disabled = true;
-        startButton.textContent = 'Starting...';
-        status.textContent = 'Starting game for both players...';
 
-        const fallback = window.setTimeout(() => {
-          if (finished) return;
-          startButton.disabled = false;
-          startButton.textContent = 'Start Game';
-          status.textContent = 'Start confirmation was not received. Press Start Game again.';
-        }, 7000);
-
-        this.socket.emit('start-room', (response?: { ok: boolean; message?: string }) => {
-          if (response?.ok) return;
-          window.clearTimeout(fallback);
-          startButton.disabled = false;
-          startButton.textContent = 'Start Game';
-          status.textContent = response?.message || 'Unable to start the room.';
-        });
-      };
     });
   }
 

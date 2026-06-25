@@ -1692,76 +1692,37 @@ function main() {
     try {
       await multiplayer.showLobby();
     } catch (error) {
-      alert(error instanceof Error ? error.message : "تعذر الاتصال بسيرفر اللعب الجماعي");
+      alert(error instanceof Error ? error.message : "Unable to connect to the multiplayer server");
       return;
     }
     elements.startScreen.style.display = "none";
     elements.loadingScreen.style.display = "flex";
     elements.container.style.display = "block";
 
-    const loadingManager = new GameLoadingManager(() => {
+    const loadingManager = new GameLoadingManager(async () => {
       elements.loadingScreen.style.display = "none";
-      showClickToPlay(async () => {
-        if (!game) {
-          game = new Game(loadingManager, multiplayer);
-          (window as any).game = game;
+
+      if (!game) {
+        game = new Game(loadingManager, multiplayer);
+        (window as any).game = game;
+      }
+
+      [rainAudio, bgAudio].forEach(audio => {
+        if (audio) {
+          audio.loop = true;
+          audio.play().catch(() => { });
         }
-
-        [rainAudio, bgAudio].forEach(audio => {
-          if (audio) {
-            audio.loop = true;
-            audio.play().catch(() => { });
-          }
-        });
-
-        // Some mobile browsers can reject AudioContext or audio decoding.
-        // Always start the game even when zombie audio is unavailable.
-        await loadZombieAudioBuffer();
-        game.startAfterLoading();
       });
+
+      // Start immediately after both players enter the room and assets finish loading.
+      // The first click inside the game can still capture the mouse pointer.
+      await loadZombieAudioBuffer();
+      game.startAfterLoading();
     });
 
     game = new Game(loadingManager, multiplayer);
     (window as any).game = game;
   });
-}
-
-function showClickToPlay(onClick: () => void | Promise<void>) {
-  const overlay = document.createElement('div');
-  overlay.style.cssText =
-    'position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.7);' +
-    'display:flex;flex-direction:column;align-items:center;justify-content:center;' +
-    'z-index:200;color:#fff;cursor:pointer;';
-
-  overlay.innerHTML = `
-    <div style="font-size:2rem">Click to Play</div>
-    <div style="font-size:1.2rem;margin-top:1.5rem;text-align:center">
-      Use <b>W A S D</b> to move<br/><br/>
-      Hold <b>SPACE</b> or Left Click to shoot<br/><br/>
-      Press <b>R</b> to reload<br/><br/>
-      Press <b>F</b> to toggle flashlight
-    </div>
-  `;
-
-  let starting = false;
-  overlay.addEventListener('click', async () => {
-    if (starting) return;
-    starting = true;
-
-    const title = overlay.firstElementChild as HTMLElement | null;
-    if (title) title.textContent = 'Starting game...';
-
-    try {
-      await onClick();
-      overlay.remove();
-    } catch (error) {
-      console.error('Game startup failed:', error);
-      starting = false;
-      if (title) title.textContent = 'تعذر بدء اللعبة — اضغطي للمحاولة مرة أخرى';
-    }
-  });
-
-  document.body.appendChild(overlay);
 }
 
 main();
