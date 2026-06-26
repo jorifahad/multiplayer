@@ -2,7 +2,7 @@
 
 ![Game Screenshot](./public/image.webp)
 
-A browser-based 3D cooperative zombie shooter built with Three.js, featuring adaptive enemy intelligence, online multiplayer rooms, synchronized gameplay, and mission-based progression.
+A browser-based 3D two-player cooperative zombie shooter built with Three.js, TypeScript, Socket.IO, and Node.js. The game combines adaptive enemy difficulty, synchronized multiplayer combat, shared mission progression, host migration, and mission-based zombie waves.
 
 ---
 
@@ -10,99 +10,138 @@ A browser-based 3D cooperative zombie shooter built with Three.js, featuring ada
 
 Enter a hostile military sector overrun by infected enemies.
 
-Your team must survive the outbreak, eliminate the remaining zombies, restore power to the sector, and return safely to the extraction point.
+Two players must eliminate the first zombie wave, reach the electrical control point, restore power, survive a second wave entering from beyond the front gate, and return to the extraction point.
 
-The game can be played solo or cooperatively with another player through a private room code.
+The current version is designed for **two-player online cooperative play** using a private room code.
 
 ---
 
-## Mission Objectives
+## Mission Flow
 
-* Enter the infected sector.
-* Eliminate all hostile zombies.
-* Restore power using the electrical control box.
-* Survive the second enemy wave.
-* Return to the extraction point.
-* Complete the mission with your teammate.
+1. Create or join a private multiplayer room.
+2. The mission starts automatically when the second player joins.
+3. Eliminate the first zombie wave.
+4. Reach the electrical control point.
+5. Restore power to the sector.
+6. Fight the second wave spawning beyond the front gate.
+7. Return to the extraction point.
+8. Complete the mission together.
 
 ---
 
 ## Key Features
 
-* Online two-player cooperative gameplay.
-* Private multiplayer rooms using shareable room codes.
-* Real-time player movement synchronization.
-* Shared mission progress between players.
-* Synchronized zombie elimination.
-* Adaptive enemy behavior based on player performance.
-* Enemy difficulty changes according to:
-
-  * Shooting accuracy.
-  * Elimination speed.
-  * Player health.
-  * Damage received.
-* Simultaneous movement and shooting.
-* Automatic weapon reload.
-* First-person weapon animations.
-* Dynamic lighting and flashlight mechanics.
-* Environmental rain and spatial zombie audio.
-* Mission checkpoints with success and failure states.
-* Responsive HUD for ammunition, health, and mission progress.
+- Online two-player cooperative gameplay.
+- Private rooms with five-character shareable room codes.
+- Automatic mission start when the second player joins.
+- Real-time player movement, shooting, health, and damage synchronization.
+- Shared zombie state and mission-stage synchronization.
+- Shared adaptive difficulty based on the stronger-performing player.
+- Automatic host migration when the current host dies or disconnects.
+- Continued gameplay when one player dies; the surviving teammate can continue the mission.
+- A visible 3D soldier model for the second player.
+- Zombies target the nearest living player.
+- Simultaneous movement and shooting.
+- Diagonal movement using combined W/A/S/D input.
+- Automatic weapon reload and a reduced reload time of 1.6 seconds.
+- First-person weapon animations, muzzle flash, recoil, and camera shake.
+- Dynamic flashlight and street-light behavior.
+- Environmental rain and spatial zombie audio.
+- Mission checkpoints with shared progression.
+- HUD for ammunition, health, enemy difficulty, and zombie eliminations.
+- Zombie death behavior where enemies fall to the ground, remain briefly, and then disappear cleanly.
+- Reduced zombie network update frequency and smoothed remote movement to limit lag and sudden position jumps.
 
 ---
 
 ## Adaptive Enemy AI
 
-The game includes a dynamic difficulty system that continuously evaluates player performance.
+The adaptive difficulty system continuously evaluates player performance using:
 
-When the player performs well, enemies may:
+- Shooting accuracy.
+- Elimination rate.
+- Remaining health.
+- Damage received.
 
-* Move faster.
-* Become more aggressive.
-* Cause increased damage.
-* Detect the player from greater distances.
-* Apply greater pressure during combat.
+The server compares both players' difficulty reports and broadcasts the higher value to the room, ensuring that both players face the same shared enemy difficulty.
 
-When the player is struggling, the system gradually reduces enemy difficulty to maintain balanced gameplay.
+When performance is strong, zombies may:
 
-This creates a different experience depending on the skill and performance of each player.
+- Move faster.
+- Deal more damage.
+- Detect players from greater distances.
+- Flank more often.
+- Maintain stronger separation while approaching.
+
+When performance drops, enemy settings gradually become less demanding to keep combat balanced.
 
 ---
 
 ## Multiplayer System
 
-Players can create or join private cooperative rooms.
+The multiplayer system is implemented with Socket.IO and an Express/Node.js server.
 
 ### Create a Room
 
 1. Select **Create Room**.
 2. Copy the generated room code.
-3. Share the code with the second player.
+3. Send the code to the second player.
 4. Wait for the second player to join.
-5. Start the mission.
+5. The mission starts automatically for both players.
 
 ### Join a Room
 
-1. Select **Join Room**.
-2. Enter the room code.
-3. Wait for the room host to start the game.
+1. Enter the room code.
+2. Select **Join**.
+3. The mission starts automatically after the connection is confirmed.
 
-The multiplayer system is implemented using Socket.IO and a Node.js server.
+No additional host start button or second click is required.
+
+### Multiplayer Reliability
+
+- The server tracks each player's health.
+- If the host dies, zombie simulation authority transfers to a living teammate.
+- If the host disconnects, the remaining player is promoted instead of immediately ending the room.
+- Dead players are removed as zombie targets.
+- The render loop and multiplayer synchronization continue after local player death.
+
+---
+
+## Zombie Waves and Death Behavior
+
+### First Wave
+
+The first wave is distributed across the map at a safe distance from the initial player position.
+
+### Second Wave
+
+The second wave spawns beyond the front gate, ahead of the players rather than behind them. Spawn positions are distributed across multiple rows and columns to avoid a single straight line of enemies.
+
+### Zombie Death
+
+Each zombie:
+
+1. Stops its walking animation after its health reaches zero.
+2. Falls toward the ground.
+3. Remains visible briefly.
+4. Disappears cleanly with its shadow disabled.
+
+Material fading is intentionally avoided because shared transparent materials previously caused living zombies to become invisible while leaving their shadows visible.
 
 ---
 
 ## Controls
 
-| Action            | Control           |
-| ----------------- | ----------------- |
-| Move forward      | W                 |
-| Move backward     | S                 |
-| Move left         | A                 |
-| Move right        | D                 |
-| Shoot             | Left Mouse Button |
-| Reload            | R                 |
-| Toggle flashlight | F                 |
-| Look around       | Mouse             |
+| Action | Control |
+| --- | --- |
+| Move forward | W |
+| Move backward | S |
+| Move left | A |
+| Move right | D |
+| Shoot | Left Mouse Button or Space |
+| Reload | R |
+| Toggle flashlight | F |
+| Look around | Mouse |
 
 Movement and shooting can be performed simultaneously.
 
@@ -110,34 +149,17 @@ Movement and shooting can be performed simultaneously.
 
 ## Technology Stack
 
-* TypeScript
-* Three.js
-* Socket.IO
-* Node.js
-* Express
-* Vite
-* GLTF 3D Models
-* Web Audio API
-* Adaptive Difficulty System
-* Real-Time Multiplayer Synchronization
-
----
-
-## Project Enhancements
-
-This version introduces substantial gameplay and technical improvements, including:
-
-* Adaptive enemy artificial intelligence.
-* Player-performance tracking.
-* Dynamic enemy speed, damage, and aggression.
-* Two-player online cooperative mode.
-* Room creation and room-code joining.
-* Multiplayer waiting room.
-* Host-controlled game start.
-* Real-time position and combat synchronization.
-* Multiplayer server connectivity handling.
-* Improved simultaneous movement and shooting.
-* Expanded mission and user-interface systems.
+- TypeScript
+- Three.js
+- Socket.IO
+- Node.js
+- Express
+- Vite
+- GLTF 3D models
+- Web Audio API
+- Pointer Lock API
+- Adaptive difficulty system
+- Real-time multiplayer synchronization
 
 ---
 
@@ -151,16 +173,91 @@ This version introduces substantial gameplay and technical improvements, includi
 ├── server.ts
 ├── index.html
 ├── package.json
-└── render.yaml
+├── render.yaml
+├── .env.example
+└── README.md
 ```
+
+---
+
+## Local Development
+
+### 1. Install dependencies
+
+```bash
+npm install
+```
+
+### 2. Configure the multiplayer server URL
+
+Copy `.env.example` to `.env` and keep the local server URL:
+
+```env
+VITE_SERVER_URL=http://localhost:3001
+```
+
+### 3. Start the multiplayer server
+
+```bash
+npm run server
+```
+
+### 4. Start the game client
+
+Open a second terminal and run:
+
+```bash
+npm run dev
+```
+
+Open the local Vite URL in two browser windows to test cooperative gameplay.
+
+---
+
+## Production Deployment
+
+The repository includes a `render.yaml` configuration for the Node.js multiplayer server.
+
+After deploying the server, set the game client's environment variable to the public HTTPS server URL:
+
+```env
+VITE_SERVER_URL=https://your-server.onrender.com
+```
+
+Then rebuild and redeploy the game client.
+
+---
+
+## Major Enhancements in This Version
+
+- Adaptive enemy AI driven by player performance.
+- Shared room difficulty based on the stronger player.
+- Two-player room creation and room-code joining.
+- Automatic game start when the second player joins.
+- Real-time player, projectile, zombie, health, and mission synchronization.
+- Host migration after host death or disconnection.
+- Continued mission simulation after one player dies.
+- Nearest-living-player zombie targeting.
+- 3D teammate soldier representation.
+- Full horizontal 360-degree camera rotation.
+- Simultaneous movement and shooting.
+- Faster weapon reload.
+- Shared mission checkpoints and staged progression.
+- Second-wave spawning beyond the front gate.
+- Improved zombie fall-and-disappear behavior.
+- Smoothed remote zombie movement and reduced network update load.
+- English multiplayer lobby and status messages.
+- Simplified start screen without the original promotional and credit sections.
+
+---
 
 ## Development
 
 ### Enhanced and Extended By
 
-**Jori Baaljahr** , **Jood Khamjan**
+**Jori Baaljahr** and **Jood Khamjan**
 
-Implemented the adaptive enemy AI, multiplayer room system, real-time synchronization, waiting-room flow, network connectivity improvements, and gameplay enhancements included in this version.
+Implemented the adaptive enemy AI, player-performance tracking, multiplayer room system, automatic room start, real-time synchronization, host migration, shared mission progression, teammate representation, combat improvements, zombie-wave adjustments, and network optimizations included in this version.
 
 ---
 
@@ -170,8 +267,8 @@ This project is an extensively modified and expanded version of the original **Z
 
 Original development credits:
 
-* **Rohan Vashisht** — original programming, map design, game design, and voice work.
-* **Alok Nair** — original music and sound management, asset research, testing, and feedback.
+- **Rohan Vashisht** — original programming, map design, game design, and voice work.
+- **Alok Nair** — original music and sound management, asset research, testing, and feedback.
 
 Original repository:
 
@@ -187,30 +284,29 @@ The project contains third-party models, audio, and libraries that remain subjec
 
 ### Music
 
-* Karl Casey — White Bat Audio
+- Karl Casey — White Bat Audio
 
 ### Sound Effects
 
-* Pixabay
+- Pixabay
 
 ### 3D Assets
 
-* Zombie Hazmat
-* FPS AK-74M with animations
-* Fence
-* Wall and Door
-* Sandbags
-* Low-poly police car
-* Crashed abandoned car
-* Electrical control box
-* WWII air traffic control tower
-* PSX-style brick wall
+- Zombie Hazmat
+- FPS AK-74M with animations
+- Fence
+- Wall and Door
+- Sandbags
+- Low-poly police car
+- Crashed abandoned car
+- Electrical control box
+- WWII air traffic control tower
+- PSX-style brick wall
 
-Detailed model sources and licenses should be retained in the project documentation or asset attribution file.
+Detailed model sources and licenses should remain available in the repository documentation or a dedicated attribution file.
 
 ---
 
 ## Disclaimer
 
-This repository contains original enhancements together with modified third-party code and assets. Ownership of external libraries, models, sounds, and original project components remains with their respective creators.
-
+This repository combines original enhancements with modified third-party code and assets. Ownership of external libraries, models, audio, and original project components remains with their respective creators and license holders.
